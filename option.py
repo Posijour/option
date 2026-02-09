@@ -1,0 +1,355 @@
+import requests
+import time
+import csv
+import os
+from datetime import datetime, timezone
+from collections import defaultdict, deque
+import threading
+import requests as tg_requests
+
+# ================== CONFIG ==================
+
+BASE_URL = "https://api.bybit.com"
+SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
+
+CHECK_INTERVAL = 300  # 5 min
+STABILITY_WINDOW = 3
+MCI_WINDOW = 12
+
+CREDIT_CHEAP = 0.30
+CREDIT_EXPENSIVE = 0.15
+SKEW_DOWN = 1.20
+SKEW_UP = 0.90
+
+NEAR_MIN = 0
+NEAR_MAX = 3
+MID_MIN = 7
+MID_MAX = 14
+
+HISTORY_FILE = "market_regime_history.csv"
+
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+LAST_UPDATE_ID = 0
+
+# cooldowns (minutes)
+ALERT_COOLDOWN = {
+    "CALM_COMPRESSION": 60,
+    "CALM_DECAY": 30,
+    "DIRECTIONAL_PRESSURE": 30,
+    "PHASE_SHIFT": 60,
+}
+
+# ============================================
+
+def tg_send(text):
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return
+    try:
+        tg_requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": text},
+            timeout=5
+        )
+    except Exception:
+        pass
+
+# ---------- API ----------
+def get_option_tickers(symbol):
+    r = requests.get(
+        f"{BASE_URL}/v5/market/tickers",
+        params={"category": "option", "baseCoin": symbol},
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.json()["result"]["list"]
+
+# ---------- PARSER ----------
+def parse_symbol(sym):
+    p = sym.split("-")
+    return {
+        "base": p[0],
+        "expiry": datetime.strptime(p[1], "%d%b%y").replace(tzinfo=timezone.utc),
+        "strike": float(p[2]),
+        "type": "CALL" if p[3] == "C" else "PUT",
+    }
+
+# ---------- OPTION CHAIN ----------
+def build_option_chain(symbol):
+    out = []
+    for t in get_option_tickers(symbol):
+        try:
+            p = parse_symbol(t["symbol"])
+            out.append({
+                **p,
+                "bid": float(t["bid1Price"]),
+                "ask": float(t["ask1Price"]),
+                "iv": float(t.get("markIv", 0) or 0)
+            })
+        except Exception:
+            continue
+    return out
+
+# ---------- SPREAD SENSOR ----------
+def best_credit_spread(opts):
+    opts = sorted(opts, key=lambda x: x["strike"])
+    best = None
+    for i in range(len(opts) - 1):
+        w = abs(opts[i]["strike"] - opts[i + 1]["strike"])
+        if w <= 0:
+            continue
+        c = opts[i]["bid"] - opts[i + 1]["ask"]
+        if c <= 0:
+            continue
+        r = c / w
+        if not best or r > best["ratio"]:
+            best = {"ratio": r}
+    return best
+
+# ---------- REGIME ----------
+def regime_for_expiry(opts):
+    puts = [o for o in opts if o["type"] == "PUT"]
+    calls = [o for o in opts if o["type"] == "CALL"]
+    if not puts or not calls:
+        return None
+
+    ps = best_credit_spread(puts)
+    cs = best_credit_spread(calls)
+
+    def cls(s):
+        if not s:
+            return "expensive"
+        if s["ratio"] >= CREDIT_CHEAP:
+            return "cheap"
+        if s["ratio"] >= CREDIT_EXPENSIVE:
+            return "neutral"
+        return "expensive"
+
+    downside = cls(ps)
+    upside = cls(cs)
+
+    short_vol = (
+        ps and cs and ps["ratio"] >= 0.20 and cs["ratio"] >= 0.20
+    )
+
+    piv = [p["iv"] for p in puts if p["iv"] > 0]
+    civ = [c["iv"] for c in calls if c["iv"] > 0]
+    skew = (sum(piv)/len(piv))/(sum(civ)/len(civ)) if piv and civ else 1.0
+
+    if short_vol:
+        return "CALM"
+    if skew > SKEW_DOWN and downside != "cheap":
+        return "DIRECTIONAL_DOWN"
+    if skew < SKEW_UP and upside != "cheap":
+        return "DIRECTIONAL_UP"
+    return "UNCERTAIN"
+
+def interpret_market(symbol):
+    chain = build_option_chain(symbol)
+    now = datetime.now(timezone.utc)
+    near, mid = [], []
+    for o in chain:
+        dte = (o["expiry"] - now).days
+        if NEAR_MIN <= dte <= NEAR_MAX:
+            near.append(o)
+        elif MID_MIN <= dte <= MID_MAX:
+            mid.append(o)
+    if not near or not mid:
+        return None
+    r1, r2 = regime_for_expiry(near), regime_for_expiry(mid)
+    return r1 if r1 == r2 else "UNCERTAIN"
+
+# ---------- STATE ----------
+regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
+mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
+last_phase = {s: None for s in SYMBOLS}
+alert_ts = defaultdict(dict)
+
+def mci_value(reg):
+    return 1 if reg == "CALM" else -1 if reg.startswith("DIRECTIONAL") else 0
+
+def calc_mci(symbol):
+    h = mci_hist[symbol]
+    return round(sum(h)/len(h), 2) if len(h) == MCI_WINDOW else None
+
+def calc_slope(symbol):
+    h = mci_hist[symbol]
+    if len(h) < MCI_WINDOW:
+        return None
+    half = MCI_WINDOW // 2
+    return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
+
+def mci_phase(mci, slope):
+    if mci is None or slope is None:
+        return None
+    if 0.50 <= mci <= 0.75 and slope > 0.02:
+        return "ACCUMULATING_CALM"
+    if 0.60 <= mci <= 0.80 and -0.02 <= slope <= 0.02:
+        return "STABLE_CALM"
+    if mci >= 0.75 and abs(slope) <= 0.02:
+        return "OVERCOMPRESSED"
+    if 0.40 <= mci <= 0.70 and slope < -0.02:
+        return "RELEASING"
+    return None
+
+def log_row(row):
+    exists = os.path.isfile(HISTORY_FILE)
+    with open(HISTORY_FILE, "a", newline="") as f:
+        w = csv.writer(f)
+        if not exists:
+            w.writerow(row.keys())
+        w.writerow(row.values())
+
+# ---------- ALERTS ----------
+def maybe_alert(symbol, phase, mci, slope):
+    now = time.time()
+    def ok(t): return now - alert_ts[symbol].get(t, 0) > ALERT_COOLDOWN[t]*60
+
+    if mci and slope is not None:
+        if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
+            alert_ts[symbol]["CALM_COMPRESSION"] = now
+            tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
+        if mci > 0.4 and slope < 0 and ok("CALM_DECAY"):
+            alert_ts[symbol]["CALM_DECAY"] = now
+            tg_send(f"⚠️ {symbol} CALM_DECAY")
+        if mci < 0.2 and slope < 0 and ok("DIRECTIONAL_PRESSURE"):
+            alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now
+            tg_send(f"⚠️ {symbol} DIRECTIONAL_PRESSURE")
+
+    if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
+        alert_ts[symbol]["PHASE_SHIFT"] = now
+        tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
+        last_phase[symbol] = phase
+
+
+def build_status_text():
+    lines = []
+    mcis = []
+    slopes = []
+
+    lines.append("📊 *OPTIONS MARKET STATUS*\n")
+
+    for s in SYMBOLS:
+        mci = calc_mci(s)
+        slope = calc_slope(s)
+        phase = mci_phase(mci, slope)
+
+        if mci is not None:
+            mcis.append(mci)
+        if slope is not None:
+            slopes.append(slope)
+
+        lines.append(
+            f"{s}: {regime_hist[s][-1] if regime_hist[s] else '—'} | "
+            f"MCI {mci} | slope {slope} | {phase}"
+        )
+
+    if mcis:
+        avg_mci = round(sum(mcis) / len(mcis), 2)
+        avg_slope = round(sum(slopes) / len(slopes), 3) if slopes else 0
+
+        lines.insert(
+            1,
+            f"🌍 Market: MCI {avg_mci} | slope {avg_slope}\n"
+        )
+
+    return "\n".join(lines)
+
+
+def tg_polling():
+    global LAST_UPDATE_ID
+
+    if not TG_TOKEN:
+        return
+
+    while True:
+        try:
+            r = tg_requests.get(
+                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                params={"offset": LAST_UPDATE_ID + 1, "timeout": 10},
+                timeout=15
+            )
+            data = r.json()
+
+            for upd in data.get("result", []):
+                LAST_UPDATE_ID = upd["update_id"]
+
+                msg = upd.get("message")
+                if not msg:
+                    continue
+
+                text = msg.get("text", "")
+                chat_id = msg["chat"]["id"]
+
+                if text.strip() == "/status":
+                    tg_requests.post(
+                        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": build_status_text()
+                        },
+                        timeout=5
+                    )
+
+        except Exception:
+            pass
+
+        time.sleep(5)
+
+
+# ---------- DAILY LOG ROTATION ----------
+def daily_sender():
+    while True:
+        now = datetime.now(timezone.utc)
+        if now.hour == 11 and now.minute < 2:
+            if os.path.isfile(HISTORY_FILE):
+                tg_send("📎 Daily options log")
+                tg_requests.post(
+                    f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
+                    data={"chat_id": TG_CHAT_ID},
+                    files={"document": open(HISTORY_FILE, "rb")}
+                )
+                open(HISTORY_FILE, "w").close()
+            time.sleep(120)
+        time.sleep(30)
+
+# ---------- MAIN ----------
+def main():
+    threading.Thread(target=daily_sender, daemon=True).start()
+    threading.Thread(target=tg_polling, daemon=True).start()
+    print("Options Market Regime Engine started")
+
+    while True:
+        print("\nCycle:", datetime.now(timezone.utc))
+        for s in SYMBOLS:
+            try:
+                r = interpret_market(s)
+                if not r:
+                    continue
+                regime_hist[s].append(r)
+                mci_hist[s].append(mci_value(r))
+
+                mci = calc_mci(s)
+                slope = calc_slope(s)
+                phase = mci_phase(mci, slope)
+
+                maybe_alert(s, phase, mci, slope)
+
+                log_row({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "symbol": s,
+                    "regime": r,
+                    "mci": mci,
+                    "mci_slope": slope,
+                    "mci_phase": phase,
+                })
+
+                print(s, r, "MCI:", mci, "SLOPE:", slope, "PHASE:", phase)
+
+            except Exception as e:
+                print(s, "ERROR:", e)
+
+        time.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    main()
