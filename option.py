@@ -198,11 +198,14 @@ def calc_mci(symbol):
     return round(sum(h)/len(h), 2) if len(h) == MCI_WINDOW else None
 
 def calc_slope(symbol):
-    h = mci_hist[symbol]
+    h = list(mci_hist[symbol])   # ← ВАЖНО
     if len(h) < MCI_WINDOW:
         return None
     half = MCI_WINDOW // 2
-    return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
+    return round(
+        sum(h[half:]) / half - sum(h[:half]) / half,
+        3
+    )
 
 def mci_phase(mci, slope):
     if mci is None or slope is None:
@@ -315,6 +318,11 @@ def tg_polling(stop_event):
 
         stop_event.wait(5)
 
+
+def ts_unix_ms():
+    return int(time.time() * 1000)
+
+
 # ---------- DAILY LOG ----------
 def daily_sender(stop_event):
     while not stop_event.is_set():
@@ -363,7 +371,7 @@ def main():
                     maybe_alert(s, phase, mci, slope)
 
                     log_row({
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "ts_unix_ms": ts_unix_ms(),
                         "symbol": s,
                         "regime": r,
                         "mci": mci,
@@ -386,5 +394,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
