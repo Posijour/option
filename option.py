@@ -242,6 +242,37 @@ def maybe_alert(symbol, phase, mci, slope):
         tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
         last_phase[symbol] = phase
 
+
+# ---------- STATUS ----------
+def build_status_text():
+    lines = ["📊 OPTIONS MARKET STATUS\n"]
+    mcis, slopes = [], []
+
+    for s in SYMBOLS:
+        mci = calc_mci(s)
+        slope = calc_slope(s)
+        phase = mci_phase(mci, slope)
+
+        if mci is not None:
+            mcis.append(mci)
+        if slope is not None:
+            slopes.append(slope)
+
+        lines.append(
+            f"{s}: {regime_hist[s][-1] if regime_hist[s] else '—'} | "
+            f"MCI {mci} | slope {slope} | {phase}"
+        )
+
+    if mcis:
+        avg_mci = round(sum(mcis) / len(mcis), 2)
+        avg_slope = round(sum(slopes) / len(slopes), 3) if slopes else 0
+        lines.insert(
+            1,
+            f"🌍 Market: MCI {avg_mci} | slope {avg_slope}\n"
+        )
+
+    return "\n".join(lines)
+
 # ---------- TELEGRAM POLLING ----------
 def tg_polling(stop_event):
     global LAST_UPDATE_ID
@@ -275,8 +306,8 @@ def tg_polling(stop_event):
                         json={"chat_id": chat_id, "text": "pong"},
                         timeout=5
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            print("TG POLLING ERROR:", e, flush=True)
 
         stop_event.wait(5)
 
@@ -351,3 +382,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
