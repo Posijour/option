@@ -14,6 +14,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 BASE_URL = "https://api.bybit.com"
 SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 
+SEND_ALERTS_TO_TG = False   # ⛔ Telegram off
+LOG_ALERTS = True          # ✅ CSV on
+
 CHECK_INTERVAL = 300  # 5 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
@@ -229,6 +232,20 @@ def log_row(row):
             w.writerow(row.keys())
         w.writerow(row.values())
 
+def log_alert(symbol, alert_type, mci, slope, phase):
+    if not LOG_ALERTS:
+        return
+
+    log_row({
+        "ts_unix_ms": now_ts_ms(),
+        "symbol": symbol,
+        "regime": "",
+        "mci": mci,
+        "mci_slope": slope,
+        "mci_phase": phase,
+        "alert": alert_type,
+    })
+
 # ---------- ALERTS (MS) ----------
 def maybe_alert(symbol, phase, mci, slope):
     now_ms = now_ts_ms()
@@ -238,18 +255,30 @@ def maybe_alert(symbol, phase, mci, slope):
     if mci is not None and slope is not None:
         if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
             alert_ts[symbol]["CALM_COMPRESSION"] = now_ms
-            tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
+            log_alert(symbol, "CALM_COMPRESSION", mci, slope, phase)
+            if SEND_ALERTS_TO_TG:
+                tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
+
         if mci > 0.4 and slope < 0 and ok("CALM_DECAY"):
             alert_ts[symbol]["CALM_DECAY"] = now_ms
-            tg_send(f"⚠️ {symbol} CALM_DECAY")
+            log_alert(symbol, "CALM_DECAY", mci, slope, phase)
+            if SEND_ALERTS_TO_TG:
+                tg_send(f"⚠️ {symbol} CALM_DECAY")
+
         if mci < 0.2 and slope < 0 and ok("DIRECTIONAL_PRESSURE"):
             alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now_ms
-            tg_send(f"⚠️ {symbol} DIRECTIONAL_PRESSURE")
+            log_alert(symbol, "DIRECTIONAL_PRESSURE", mci, slope, phase)
+            if SEND_ALERTS_TO_TG:
+                tg_send(f"⚠️ {symbol} DIRECTIONAL_PRESSURE")
 
-    if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
-        alert_ts[symbol]["PHASE_SHIFT"] = now_ms
-        tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
-        last_phase[symbol] = phase
+
+        if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
+            alert_ts[symbol]["PHASE_SHIFT"] = now_ms
+            log_alert(symbol, f"PHASE_SHIFT:{phase}", mci, slope, phase)
+            if SEND_ALERTS_TO_TG:
+                tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
+            last_phase[symbol] = phase
+
 
 # ---------- DAILY LOG ----------
 def daily_sender(stop_event):
@@ -321,3 +350,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
