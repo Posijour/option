@@ -47,7 +47,11 @@ ALERT_COOLDOWN = {
 
 stop_event = Event()
 
-# ---------- HTTP (для Render Web Service) ----------
+# ---------- TIME (UNIFIED, MS) ----------
+def now_ts_ms():
+    return int(time.time() * 1000)
+
+# ---------- HTTP ----------
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -198,14 +202,11 @@ def calc_mci(symbol):
     return round(sum(h)/len(h), 2) if len(h) == MCI_WINDOW else None
 
 def calc_slope(symbol):
-    h = list(mci_hist[symbol])   # ← ВАЖНО
+    h = list(mci_hist[symbol])
     if len(h) < MCI_WINDOW:
         return None
     half = MCI_WINDOW // 2
-    return round(
-        sum(h[half:]) / half - sum(h[:half]) / half,
-        3
-    )
+    return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
 
 def mci_phase(mci, slope):
     if mci is None or slope is None:
@@ -228,100 +229,27 @@ def log_row(row):
             w.writerow(row.keys())
         w.writerow(row.values())
 
-# ---------- ALERTS ----------
+# ---------- ALERTS (MS) ----------
 def maybe_alert(symbol, phase, mci, slope):
-    now = time.time()
-    def ok(t): return now - alert_ts[symbol].get(t, 0) > ALERT_COOLDOWN[t]*60
+    now_ms = now_ts_ms()
+    def ok(t):
+        return now_ms - alert_ts[symbol].get(t, 0) > ALERT_COOLDOWN[t] * 60 * 1000
 
     if mci is not None and slope is not None:
         if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
-            alert_ts[symbol]["CALM_COMPRESSION"] = now
+            alert_ts[symbol]["CALM_COMPRESSION"] = now_ms
             tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
         if mci > 0.4 and slope < 0 and ok("CALM_DECAY"):
-            alert_ts[symbol]["CALM_DECAY"] = now
+            alert_ts[symbol]["CALM_DECAY"] = now_ms
             tg_send(f"⚠️ {symbol} CALM_DECAY")
         if mci < 0.2 and slope < 0 and ok("DIRECTIONAL_PRESSURE"):
-            alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now
+            alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now_ms
             tg_send(f"⚠️ {symbol} DIRECTIONAL_PRESSURE")
 
     if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
-        alert_ts[symbol]["PHASE_SHIFT"] = now
+        alert_ts[symbol]["PHASE_SHIFT"] = now_ms
         tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
         last_phase[symbol] = phase
-
-
-# ---------- STATUS ----------
-def build_status_text():
-    lines = ["📊 OPTIONS MARKET STATUS\n"]
-    mcis, slopes = [], []
-
-    for s in SYMBOLS:
-        mci = calc_mci(s)
-        slope = calc_slope(s)
-        phase = mci_phase(mci, slope)
-
-        if mci is not None:
-            mcis.append(mci)
-        if slope is not None:
-            slopes.append(slope)
-
-        lines.append(
-            f"{s}: {regime_hist[s][-1] if regime_hist[s] else '—'} | "
-            f"MCI {mci} | slope {slope} | {phase}"
-        )
-
-    if mcis:
-        avg_mci = round(sum(mcis) / len(mcis), 2)
-        avg_slope = round(sum(slopes) / len(slopes), 3) if slopes else 0
-        lines.insert(
-            1,
-            f"🌍 Market: MCI {avg_mci} | slope {avg_slope}\n"
-        )
-
-    return "\n".join(lines)
-
-# ---------- TELEGRAM POLLING ----------
-def tg_polling(stop_event):
-    global LAST_UPDATE_ID
-    if not TG_TOKEN:
-        return
-
-    while not stop_event.is_set():
-        try:
-            r = tg_requests.get(
-                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-                params={"offset": LAST_UPDATE_ID + 1, "timeout": 20},
-                timeout=25
-            )
-            for upd in r.json().get("result", []):
-                LAST_UPDATE_ID = upd["update_id"]
-                msg = upd.get("message")
-                if not msg:
-                    continue
-                text = msg.get("text", "")
-                chat_id = msg["chat"]["id"]
-
-                if text.strip() == "/status":
-                    tg_requests.post(
-                        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": build_status_text()},
-                        timeout=5
-                    )
-                elif text.strip() == "/ping":
-                    tg_requests.post(
-                        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": "pong"},
-                        timeout=5
-                    )
-        except Exception as e:
-            print("TG POLLING ERROR:", e, flush=True)
-
-        stop_event.wait(5)
-
-
-def ts_unix_ms():
-    return int(time.time() * 1000)
-
 
 # ---------- DAILY LOG ----------
 def daily_sender(stop_event):
@@ -347,7 +275,6 @@ def main():
     print("Options Market Regime Engine started", flush=True)
 
     threading.Thread(target=run_http_server, daemon=True).start()
-    threading.Thread(target=tg_polling, args=(stop_event,), daemon=True).start()
     threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
 
     try:
@@ -371,7 +298,7 @@ def main():
                     maybe_alert(s, phase, mci, slope)
 
                     log_row({
-                        "ts_unix_ms": ts_unix_ms(),
+                        "ts_unix_ms": now_ts_ms(),
                         "symbol": s,
                         "regime": r,
                         "mci": mci,
@@ -394,6 +321,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
