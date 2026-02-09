@@ -88,6 +88,31 @@ def tg_send(text):
     except Exception:
         pass
 
+def tg_poll():
+    global LAST_UPDATE_ID
+    if not TG_TOKEN:
+        return
+
+    try:
+        r = tg_requests.get(
+            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+            params={"offset": LAST_UPDATE_ID + 1, "timeout": 10},
+            timeout=15
+        )
+        data = r.json()
+        for upd in data.get("result", []):
+            LAST_UPDATE_ID = upd["update_id"]
+            msg = upd.get("message", {})
+            text = msg.get("text", "")
+            chat_id = msg.get("chat", {}).get("id")
+
+            if text == "/status" and chat_id == int(TG_CHAT_ID):
+                tg_send(build_status_text())
+
+    except Exception:
+        pass
+
+
 # ---------- API ----------
 def get_option_tickers(symbol):
     r = requests.get(
@@ -195,6 +220,13 @@ def interpret_market(symbol):
 regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
 mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
 last_phase = {s: None for s in SYMBOLS}
+last_state = {}
+market_state = {
+    "mci": None,
+    "slope": None,
+    "phase": None,
+    "calm_ratio": None,
+}
 alert_ts = defaultdict(dict)
 
 def mci_value(reg):
@@ -223,6 +255,60 @@ def mci_phase(mci, slope):
     if 0.40 <= mci <= 0.70 and slope < -0.02:
         return "RELEASING"
     return None
+
+
+def build_status_text():
+    lines = ["📊 MARKET STATUS\n"]
+
+    if market_state["mci"] is not None:
+        lines.append(
+            f"🌍 MARKET\n"
+            f"MCI: {market_state['mci']} | "
+            f"slope: {market_state['slope']} | "
+            f"phase: {market_state['phase']}\n"
+            f"CALM ratio: {market_state['calm_ratio']}\n"
+        )
+    
+    lines.append("—" * 20)
+
+    if not last_state:
+        return "Нет данных"
+
+    # --- агрегаты ---
+    mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
+    avg_mci = round(sum(mci_vals)/len(mci_vals), 2) if mci_vals else None
+
+    regimes = defaultdict(int)
+    phases = defaultdict(int)
+
+    for v in last_state.values():
+        regimes[v["regime"]] += 1
+        if v["phase"]:
+            phases[v["phase"]] += 1
+
+    lines.append(
+        f"Market avg MCI: {avg_mci}\n"
+        f"CALM: {regimes.get('CALM',0)} | "
+        f"UNCERTAIN: {regimes.get('UNCERTAIN',0)} | "
+        f"DIRECTIONAL: {regimes.get('DIRECTIONAL_UP',0)+regimes.get('DIRECTIONAL_DOWN',0)}\n"
+    )
+
+    if phases:
+        dom_phase = max(phases, key=phases.get)
+        lines.append(f"Dominant phase: {dom_phase}\n")
+
+    lines.append("—"*20)
+
+    # --- по тикерам ---
+    for sym, v in last_state.items():
+        lines.append(
+            f"{sym}: {v['regime']} | "
+            f"MCI {v['mci']} | "
+            f"slope {v['slope']} | "
+            f"{v['phase']}"
+        )
+
+    return "\n".join(lines)
 
 def log_row(row):
     exists = os.path.isfile(HISTORY_FILE)
@@ -305,27 +391,38 @@ def main():
 
     threading.Thread(target=run_http_server, daemon=True).start()
     threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
-
+    threading.Thread(
+        target=lambda: [tg_poll() or time.sleep(5) for _ in iter(int, 1)],
+        daemon=True
+    ).start()
     try:
         while True:
             cycle_start = time.time()
             print("\nCycle:", datetime.now(timezone.utc), flush=True)
-
+        
+            # ====== 1. СЧИТАЕМ ТИКЕРЫ ======
             for s in SYMBOLS:
                 try:
                     r = interpret_market(s)
                     if not r:
                         continue
-
+        
                     regime_hist[s].append(r)
                     mci_hist[s].append(mci_value(r))
-
+        
                     mci = calc_mci(s)
                     slope = calc_slope(s)
                     phase = mci_phase(mci, slope)
-
+        
+                    last_state[s] = {
+                        "regime": r,
+                        "mci": mci,
+                        "slope": slope,
+                        "phase": phase,
+                    }
+        
                     maybe_alert(s, phase, mci, slope)
-
+        
                     log_row({
                         "ts_unix_ms": now_ts_ms(),
                         "symbol": s,
@@ -334,12 +431,33 @@ def main():
                         "mci_slope": slope,
                         "mci_phase": phase,
                     })
-
+        
                     print(s, r, mci, slope, phase, flush=True)
-
+        
                 except Exception as e:
                     print(s, "ERROR:", e, flush=True)
-
+        
+            # ====== 2. СЧИТАЕМ РЫНОК ЦЕЛИКОМ ======
+            mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
+            slope_vals = [v["slope"] for v in last_state.values() if v["slope"] is not None]
+        
+            if mci_vals and slope_vals:
+                market_mci = round(sum(mci_vals) / len(mci_vals), 2)
+                market_slope = round(sum(slope_vals) / len(slope_vals), 3)
+                market_phase = mci_phase(market_mci, market_slope)
+            else:
+                market_mci = market_slope = market_phase = None
+        
+            calm_count = sum(1 for v in last_state.values() if v["regime"] == "CALM")
+            market_calm_ratio = round(calm_count / len(last_state), 2) if last_state else None
+        
+            market_state.update({
+                "mci": market_mci,
+                "slope": market_slope,
+                "phase": market_phase,
+                "calm_ratio": market_calm_ratio,
+            })
+        
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
                 time.sleep(sleep_for)
@@ -350,4 +468,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
