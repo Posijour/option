@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 from collections import defaultdict, deque
 import threading
+from threading import Event
 import requests as tg_requests
 
 # ================== CONFIG ==================
@@ -32,7 +33,6 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 LAST_UPDATE_ID = 0
 
-# cooldowns (minutes)
 ALERT_COOLDOWN = {
     "CALM_COMPRESSION": 60,
     "CALM_DECAY": 30,
@@ -42,6 +42,9 @@ ALERT_COOLDOWN = {
 
 # ============================================
 
+stop_event = Event()
+
+# ---------- TELEGRAM ----------
 def tg_send(text):
     if not TG_TOKEN or not TG_CHAT_ID:
         return
@@ -84,7 +87,7 @@ def build_option_chain(symbol):
                 **p,
                 "bid": float(t["bid1Price"]),
                 "ask": float(t["ask1Price"]),
-                "iv": float(t.get("markIv", 0) or 0)
+                "iv": float(t.get("markIv") or 0)
             })
         except Exception:
             continue
@@ -128,9 +131,7 @@ def regime_for_expiry(opts):
     downside = cls(ps)
     upside = cls(cs)
 
-    short_vol = (
-        ps and cs and ps["ratio"] >= 0.20 and cs["ratio"] >= 0.20
-    )
+    short_vol = ps and cs and ps["ratio"] >= 0.20 and cs["ratio"] >= 0.20
 
     piv = [p["iv"] for p in puts if p["iv"] > 0]
     civ = [c["iv"] for c in calls if c["iv"] > 0]
@@ -205,7 +206,7 @@ def maybe_alert(symbol, phase, mci, slope):
     now = time.time()
     def ok(t): return now - alert_ts[symbol].get(t, 0) > ALERT_COOLDOWN[t]*60
 
-    if mci and slope is not None:
+    if mci is not None and slope is not None:
         if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
             alert_ts[symbol]["CALM_COMPRESSION"] = now
             tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
@@ -221,23 +222,18 @@ def maybe_alert(symbol, phase, mci, slope):
         tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
         last_phase[symbol] = phase
 
-
+# ---------- STATUS ----------
 def build_status_text():
-    lines = []
-    mcis = []
-    slopes = []
-
-    lines.append("📊 *OPTIONS MARKET STATUS*\n")
+    lines = ["📊 OPTIONS MARKET STATUS\n"]
+    mcis, slopes = [], []
 
     for s in SYMBOLS:
         mci = calc_mci(s)
         slope = calc_slope(s)
         phase = mci_phase(mci, slope)
 
-        if mci is not None:
-            mcis.append(mci)
-        if slope is not None:
-            slopes.append(slope)
+        if mci is not None: mcis.append(mci)
+        if slope is not None: slopes.append(slope)
 
         lines.append(
             f"{s}: {regime_hist[s][-1] if regime_hist[s] else '—'} | "
@@ -245,111 +241,115 @@ def build_status_text():
         )
 
     if mcis:
-        avg_mci = round(sum(mcis) / len(mcis), 2)
-        avg_slope = round(sum(slopes) / len(slopes), 3) if slopes else 0
-
-        lines.insert(
-            1,
-            f"🌍 Market: MCI {avg_mci} | slope {avg_slope}\n"
-        )
+        lines.insert(1, f"🌍 Market: MCI {round(sum(mcis)/len(mcis),2)} | slope {round(sum(slopes)/len(slopes),3) if slopes else 0}\n")
 
     return "\n".join(lines)
 
-
-def tg_polling():
+# ---------- TELEGRAM POLLING ----------
+def tg_polling(stop_event):
     global LAST_UPDATE_ID
-
     if not TG_TOKEN:
         return
 
-    while True:
+    while not stop_event.is_set():
         try:
             r = tg_requests.get(
                 f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-                params={"offset": LAST_UPDATE_ID + 1, "timeout": 10},
-                timeout=15
+                params={"offset": LAST_UPDATE_ID + 1, "timeout": 20},
+                timeout=25
             )
-            data = r.json()
-
-            for upd in data.get("result", []):
+            for upd in r.json().get("result", []):
                 LAST_UPDATE_ID = upd["update_id"]
-
                 msg = upd.get("message")
                 if not msg:
                     continue
-
                 text = msg.get("text", "")
                 chat_id = msg["chat"]["id"]
 
                 if text.strip() == "/status":
                     tg_requests.post(
                         f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                        json={
-                            "chat_id": chat_id,
-                            "text": build_status_text()
-                        },
+                        json={"chat_id": chat_id, "text": build_status_text()},
                         timeout=5
                     )
-
+                elif text.strip() == "/ping":
+                    tg_requests.post(
+                        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                        json={"chat_id": chat_id, "text": "pong"},
+                        timeout=5
+                    )
         except Exception:
             pass
 
-        time.sleep(5)
+        stop_event.wait(5)
 
-
-# ---------- DAILY LOG ROTATION ----------
-def daily_sender():
-    while True:
+# ---------- DAILY LOG ----------
+def daily_sender(stop_event):
+    while not stop_event.is_set():
         now = datetime.now(timezone.utc)
         if now.hour == 11 and now.minute < 2:
             if os.path.isfile(HISTORY_FILE):
                 tg_send("📎 Daily options log")
-                tg_requests.post(
-                    f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
-                    data={"chat_id": TG_CHAT_ID},
-                    files={"document": open(HISTORY_FILE, "rb")}
-                )
+                with open(HISTORY_FILE, "rb") as f:
+                    tg_requests.post(
+                        f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
+                        data={"chat_id": TG_CHAT_ID},
+                        files={"document": f},
+                        timeout=20
+                    )
                 open(HISTORY_FILE, "w").close()
-            time.sleep(120)
-        time.sleep(30)
+            stop_event.wait(120)
+        stop_event.wait(30)
 
 # ---------- MAIN ----------
 def main():
-    threading.Thread(target=daily_sender, daemon=True).start()
-    threading.Thread(target=tg_polling, daemon=True).start()
     print("Options Market Regime Engine started")
 
-    while True:
-        print("\nCycle:", datetime.now(timezone.utc))
-        for s in SYMBOLS:
-            try:
-                r = interpret_market(s)
-                if not r:
-                    continue
-                regime_hist[s].append(r)
-                mci_hist[s].append(mci_value(r))
+    threading.Thread(target=tg_polling, args=(stop_event,), daemon=True).start()
+    threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
 
-                mci = calc_mci(s)
-                slope = calc_slope(s)
-                phase = mci_phase(mci, slope)
+    try:
+        while True:
+            cycle_start = time.time()
+            print("\nCycle:", datetime.now(timezone.utc))
 
-                maybe_alert(s, phase, mci, slope)
+            for s in SYMBOLS:
+                try:
+                    r = interpret_market(s)
+                    if not r:
+                        continue
 
-                log_row({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "symbol": s,
-                    "regime": r,
-                    "mci": mci,
-                    "mci_slope": slope,
-                    "mci_phase": phase,
-                })
+                    regime_hist[s].append(r)
+                    mci_hist[s].append(mci_value(r))
 
-                print(s, r, "MCI:", mci, "SLOPE:", slope, "PHASE:", phase)
+                    mci = calc_mci(s)
+                    slope = calc_slope(s)
+                    phase = mci_phase(mci, slope)
 
-            except Exception as e:
-                print(s, "ERROR:", e)
+                    maybe_alert(s, phase, mci, slope)
 
-        time.sleep(CHECK_INTERVAL)
+                    log_row({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "symbol": s,
+                        "regime": r,
+                        "mci": mci,
+                        "mci_slope": slope,
+                        "mci_phase": phase,
+                    })
+
+                    print(s, r, mci, slope, phase)
+
+                except Exception as e:
+                    print(s, "ERROR:", e)
+
+            sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    except KeyboardInterrupt:
+        stop_event.set()
+        print("Shutting down")
 
 if __name__ == "__main__":
     main()
+
