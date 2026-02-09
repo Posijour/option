@@ -56,12 +56,12 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        return  # отключаем лог spam
+        return
 
 
 def run_http_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"HTTP health server listening on port {PORT}")
+    print(f"HTTP health server listening on port {PORT}", flush=True)
     server.serve_forever()
 
 # ---------- TELEGRAM ----------
@@ -300,7 +300,8 @@ def daily_sender(stop_event):
 
 # ---------- MAIN ----------
 def main():
-    print("Options Market Regime Engine started")
+    print("BOOT OK", flush=True)
+    print("Options Market Regime Engine started", flush=True)
 
     threading.Thread(target=run_http_server, daemon=True).start()
     threading.Thread(target=tg_polling, args=(stop_event,), daemon=True).start()
@@ -309,7 +310,7 @@ def main():
     try:
         while True:
             cycle_start = time.time()
-            print("\nCycle:", datetime.now(timezone.utc))
+            print("\nCycle:", datetime.now(timezone.utc), flush=True)
 
             for s in SYMBOLS:
                 try:
@@ -335,10 +336,10 @@ def main():
                         "mci_phase": phase,
                     })
 
-                    print(s, r, mci, slope, phase)
+                    print(s, r, mci, slope, phase, flush=True)
 
                 except Exception as e:
-                    print(s, "ERROR:", e)
+                    print(s, "ERROR:", e, flush=True)
 
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
@@ -346,9 +347,7 @@ def main():
 
     except KeyboardInterrupt:
         stop_event.set()
-        print("Shutting down")
+        print("Shutting down", flush=True)
 
 if __name__ == "__main__":
     main()
-
-
