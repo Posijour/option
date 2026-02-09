@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 import threading
 from threading import Event
 import requests as tg_requests
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ================== CONFIG ==================
 
@@ -33,6 +34,8 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 LAST_UPDATE_ID = 0
 
+PORT = int(os.getenv("PORT", "10000"))
+
 ALERT_COOLDOWN = {
     "CALM_COMPRESSION": 60,
     "CALM_DECAY": 30,
@@ -43,6 +46,23 @@ ALERT_COOLDOWN = {
 # ============================================
 
 stop_event = Event()
+
+# ---------- HTTP (для Render Web Service) ----------
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return  # отключаем лог spam
+
+
+def run_http_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    print(f"HTTP health server listening on port {PORT}")
+    server.serve_forever()
 
 # ---------- TELEGRAM ----------
 def tg_send(text):
@@ -222,29 +242,6 @@ def maybe_alert(symbol, phase, mci, slope):
         tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
         last_phase[symbol] = phase
 
-# ---------- STATUS ----------
-def build_status_text():
-    lines = ["📊 OPTIONS MARKET STATUS\n"]
-    mcis, slopes = [], []
-
-    for s in SYMBOLS:
-        mci = calc_mci(s)
-        slope = calc_slope(s)
-        phase = mci_phase(mci, slope)
-
-        if mci is not None: mcis.append(mci)
-        if slope is not None: slopes.append(slope)
-
-        lines.append(
-            f"{s}: {regime_hist[s][-1] if regime_hist[s] else '—'} | "
-            f"MCI {mci} | slope {slope} | {phase}"
-        )
-
-    if mcis:
-        lines.insert(1, f"🌍 Market: MCI {round(sum(mcis)/len(mcis),2)} | slope {round(sum(slopes)/len(slopes),3) if slopes else 0}\n")
-
-    return "\n".join(lines)
-
 # ---------- TELEGRAM POLLING ----------
 def tg_polling(stop_event):
     global LAST_UPDATE_ID
@@ -305,6 +302,7 @@ def daily_sender(stop_event):
 def main():
     print("Options Market Regime Engine started")
 
+    threading.Thread(target=run_http_server, daemon=True).start()
     threading.Thread(target=tg_polling, args=(stop_event,), daemon=True).start()
     threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
 
@@ -352,4 +350,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
