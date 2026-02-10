@@ -90,7 +90,7 @@ def tg_send(text):
 
 def tg_poll():
     global LAST_UPDATE_ID
-    if not TG_TOKEN:
+    if not TG_TOKEN or not TG_CHAT_ID:
         return
 
     try:
@@ -462,6 +462,9 @@ def maybe_alert(symbol, phase, mci, slope):
 
 # ---------- DAILY LOG ----------
 def daily_sender(stop_event):
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return
+
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
         if now.hour == 11 and now.minute < 2:
@@ -483,12 +486,14 @@ def main():
     print("BOOT OK", flush=True)
     print("Options Market Regime Engine started", flush=True)
 
+    def tg_loop():
+        while not stop_event.is_set():
+            tg_poll()
+            stop_event.wait(5)
+
     threading.Thread(target=run_http_server, daemon=True).start()
     threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
-    threading.Thread(
-        target=lambda: [tg_poll() or time.sleep(5) for _ in iter(int, 1)],
-        daemon=True
-    ).start()
+    threading.Thread(target=tg_loop, daemon=True).start()
     try:
         while True:
             cycle_start = time.time()
@@ -507,8 +512,8 @@ def main():
                     mci = calc_mci(s)
                     slope = calc_slope(s)
                     phase = mci_phase(mci, slope)
-                        if phase:
-                            phase_hist[s].append(phase)
+                    if phase:
+                        phase_hist[s].append(phase)
 
                     last_state[s] = {
                         "regime": r,
@@ -564,6 +569,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
