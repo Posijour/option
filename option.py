@@ -323,7 +323,38 @@ def maybe_log_market_state():
         "market_calm_ratio": market_state["calm_ratio"],
         "alert": "MARKET_STATE",
     })
+
+    for symbol in SYMBOLS:
+        state = last_state.get(symbol)
+        if not state:
+            continue
+
+        symbol_conf = phase_confidence(
+            state.get("mci"),
+            state.get("slope"),
+            list(phase_hist[symbol])
+        )
+        symbol_p1, symbol_p2 = top_phase_probabilities(
+            state.get("mci"),
+            state.get("slope")
+        )
+
+        log_row({
+            "ts_unix_ms": now_ms,
+            "symbol": symbol,
+            "regime": state.get("regime"),
+            "mci": state.get("mci"),
+            "mci_slope": state.get("slope"),
+            "mci_phase": state.get("phase"),
+            "mci_phase_confidence": symbol_conf,
+            "mci_phase_prob_top1": symbol_p1,
+            "mci_phase_prob_top2": symbol_p2,
+            "market_calm_ratio": market_state["calm_ratio"],
+            "alert": "MARKET_STATE_TICKER",
+        })
+
     last_market_log_ts = now_ms
+
 
 def log_row(row):
     exists = os.path.isfile(HISTORY_FILE)
@@ -437,6 +468,9 @@ def main():
                         "mci": mci,
                         "slope": slope,
                         "phase": phase,
+                        "confidence": confidence,
+                        "prob_top1": prob_top1,
+                        "prob_top2": prob_top2,
                     }
         
                     maybe_alert(s, phase, mci, slope)
@@ -496,4 +530,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
