@@ -220,6 +220,8 @@ def interpret_market(symbol):
 regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
 mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
 last_phase = {s: None for s in SYMBOLS}
+phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
+
 last_state = {}
 market_state = {
     "mci": None,
@@ -243,36 +245,124 @@ def calc_slope(symbol):
     half = MCI_WINDOW // 2
     return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
 
+def mean(values):
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 3)
+
+def calc_market_mci():
+    return mean([calc_mci(s) for s in SYMBOLS])
+
+def calc_market_slope():
+    return mean([calc_slope(s) for s in SYMBOLS])
+
+def calc_market_phase():
+    return mci_phase(
+        calc_market_mci(),
+        calc_market_slope()
+    )
+
+PHASE_CENTERS = {
+    "ACCUMULATING_CALM": (0.6,  0.05),
+    "STABLE_CALM":       (0.7,  0.00),
+    "OVERCOMPRESSED":   (0.9,  0.00),
+    "BREAKING_COMPRESSION": (0.9, -0.08),
+    "RELEASING":        (0.6, -0.05),
+}
+
+def probabilistic_phase(mci, slope):
+    if mci is None or slope is None:
+        return {}
+
+    scores = {}
+    for phase, (mci_c, slope_c) in PHASE_CENTERS.items():
+        dist = abs(mci - mci_c) + abs(slope - slope_c)
+        scores[phase] = 1 / (1 + dist)
+
+    total = sum(scores.values())
+    return {k: round(v / total, 2) for k, v in scores.items()}
+
 def mci_phase(mci, slope):
     if mci is None or slope is None:
         return None
-    if 0.50 <= mci <= 0.75 and slope > 0.02:
-        return "ACCUMULATING_CALM"
-    if 0.60 <= mci <= 0.80 and -0.02 <= slope <= 0.02:
-        return "STABLE_CALM"
+
     if mci >= 0.75 and abs(slope) <= 0.02:
         return "OVERCOMPRESSED"
-    if 0.40 <= mci <= 0.70 and slope < -0.02:
+
+    if mci >= 0.75 and slope < -0.05:
+        return "BREAKING_COMPRESSION"
+
+    if mci >= 0.40 and slope < -0.02:
         return "RELEASING"
+
+    if 0.50 <= mci <= 0.75 and slope > 0.02:
+        return "ACCUMULATING_CALM"
+
+    if 0.60 <= mci <= 0.80 and abs(slope) <= 0.02:
+        return "STABLE_CALM"
+
     return None
 
+def phase_confidence(mci, slope, history):
+    if mci is None or slope is None:
+        return None
+
+    mci_depth = min(1.0, max(0.0, (mci - 0.4) / 0.6))
+    slope_strength = min(1.0, abs(slope) / 0.1)
+
+    if history:
+        stability = history.count(history[-1]) / len(history)
+    else:
+        stability = 0.5
+
+    confidence = (
+        0.4 * mci_depth +
+        0.3 * slope_strength +
+        0.3 * stability
+    )
+
+    return round(min(confidence, 1.0), 2)
 
 def build_status_text():
-    lines = ["📊 MARKET STATUS\n"]
+    market_mci = market_state["mci"]
+    market_slope = market_state["slope"]
+    market_phase = market_state["phase"]
 
-    if market_state["mci"] is not None:
-        lines.append(
-            f"🌍 MARKET\n"
-            f"MCI: {market_state['mci']} | "
-            f"slope: {market_state['slope']} | "
-            f"phase: {market_state['phase']}\n"
-            f"CALM ratio: {market_state['calm_ratio']}\n"
-        )
-    
-    lines.append("—" * 20)
+    lines = [
+        "🌍 MARKET REGIME",
+        f"Phase: {market_phase}",
+        f"MCI: {market_mci} | slope: {market_slope}",
+        "",
+        "📊 SYMBOLS"
+    ]
 
     if not last_state:
         return "Нет данных"
+
+    for s, v in last_state.items():
+        mci = v["mci"]
+        slope = v["slope"]
+        phase = v["phase"]
+
+        confidence = phase_confidence(
+            mci,
+            slope,
+            phase_hist[s]
+        )
+
+        lines.append(
+            f"{s}: {v['regime']} | "
+            f"MCI {mci} | slope {slope} | {phase} | conf {confidence}"
+        )
+
+        probs = probabilistic_phase(mci, slope)
+        top = sorted(probs.items(), key=lambda x: -x[1])[:2]
+        
+        if top:
+            lines.append(
+                "    P: " + " | ".join(f"{k} {v}" for k, v in top)
+            )
 
     # --- агрегаты ---
     mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
@@ -417,7 +507,9 @@ def main():
                     mci = calc_mci(s)
                     slope = calc_slope(s)
                     phase = mci_phase(mci, slope)
-        
+                        if phase:
+                            phase_hist[s].append(phase)
+
                     last_state[s] = {
                         "regime": r,
                         "mci": mci,
@@ -472,6 +564,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
