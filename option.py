@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from collections import defaultdict, deque
 import threading
 from threading import Event
-import requests as tg_requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ================== CONFIG ==================
@@ -14,10 +13,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 BASE_URL = "https://api.bybit.com"
 SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 
-SEND_ALERTS_TO_TG = False   # ⛔ Telegram off
 LOG_ALERTS = True          # ✅ CSV on
 
 CHECK_INTERVAL = 300  # 5 min
+MARKET_LOG_INTERVAL = 30 * 60  # 30 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
 
@@ -35,7 +34,6 @@ HISTORY_FILE = "market_regime_history.csv"
 
 TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
-LAST_UPDATE_ID = 0
 
 PORT = int(os.getenv("PORT", "10000"))
 
@@ -74,44 +72,6 @@ def run_http_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     print(f"HTTP health server listening on port {PORT}", flush=True)
     server.serve_forever()
-
-# ---------- TELEGRAM ----------
-def tg_send(text):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-    try:
-        tg_requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": text},
-            timeout=5
-        )
-    except Exception:
-        pass
-
-def tg_poll():
-    global LAST_UPDATE_ID
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-
-    try:
-        r = tg_requests.get(
-            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-            params={"offset": LAST_UPDATE_ID + 1, "timeout": 10},
-            timeout=15
-        )
-        data = r.json()
-        for upd in data.get("result", []):
-            LAST_UPDATE_ID = upd["update_id"]
-            msg = upd.get("message", {})
-            text = msg.get("text", "")
-            chat_id = msg.get("chat", {}).get("id")
-
-            if text == "/status" and chat_id == int(TG_CHAT_ID):
-                tg_send(build_status_text())
-
-    except Exception:
-        pass
-
 
 # ---------- API ----------
 def get_option_tickers(symbol):
@@ -221,6 +181,8 @@ regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
 mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
 last_phase = {s: None for s in SYMBOLS}
 phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
+market_phase_hist = deque(maxlen=6)
+last_market_log_ts = 0
 
 last_state = {}
 market_state = {
@@ -324,81 +286,44 @@ def phase_confidence(mci, slope, history):
 
     return round(min(confidence, 1.0), 2)
 
-def build_status_text():
+
+def top_phase_probabilities(mci, slope):
+    probs = probabilistic_phase(mci, slope)
+    top = sorted(probs.items(), key=lambda x: -x[1])[:2]
+    if not top:
+        return None, None
+    first = f"{top[0][0]}:{top[0][1]}"
+    second = f"{top[1][0]}:{top[1][1]}" if len(top) > 1 else None
+    return first, second
+
+
+def maybe_log_market_state():
+    global last_market_log_ts
+
+    now_ms = now_ts_ms()
+    if now_ms - last_market_log_ts < MARKET_LOG_INTERVAL * 1000:
+        return
+
     market_mci = market_state["mci"]
     market_slope = market_state["slope"]
     market_phase = market_state["phase"]
+    market_conf = phase_confidence(market_mci, market_slope, list(market_phase_hist))
+    market_p1, market_p2 = top_phase_probabilities(market_mci, market_slope)
 
-    lines = [
-        "🌍 MARKET REGIME",
-        f"Phase: {market_phase}",
-        f"MCI: {market_mci} | slope: {market_slope}",
-        "",
-        "📊 SYMBOLS"
-    ]
-
-    if not last_state:
-        return "Нет данных"
-
-    for s, v in last_state.items():
-        mci = v["mci"]
-        slope = v["slope"]
-        phase = v["phase"]
-
-        confidence = phase_confidence(
-            mci,
-            slope,
-            phase_hist[s]
-        )
-
-        lines.append(
-            f"{s}: {v['regime']} | "
-            f"MCI {mci} | slope {slope} | {phase} | conf {confidence}"
-        )
-
-        probs = probabilistic_phase(mci, slope)
-        top = sorted(probs.items(), key=lambda x: -x[1])[:2]
-        
-        if top:
-            lines.append(
-                "    P: " + " | ".join(f"{k} {v}" for k, v in top)
-            )
-
-    # --- агрегаты ---
-    mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
-    avg_mci = round(sum(mci_vals)/len(mci_vals), 2) if mci_vals else None
-
-    regimes = defaultdict(int)
-    phases = defaultdict(int)
-
-    for v in last_state.values():
-        regimes[v["regime"]] += 1
-        if v["phase"]:
-            phases[v["phase"]] += 1
-
-    lines.append(
-        f"Market avg MCI: {avg_mci}\n"
-        f"CALM: {regimes.get('CALM',0)} | "
-        f"UNCERTAIN: {regimes.get('UNCERTAIN',0)} | "
-        f"DIRECTIONAL: {regimes.get('DIRECTIONAL_UP',0)+regimes.get('DIRECTIONAL_DOWN',0)}\n"
-    )
-
-    if phases:
-        dom_phase = max(phases, key=phases.get)
-        lines.append(f"Dominant phase: {dom_phase}\n")
-
-    lines.append("—"*20)
-
-    # --- по тикерам ---
-    for sym, v in last_state.items():
-        lines.append(
-            f"{sym}: {v['regime']} | "
-            f"MCI {v['mci']} | "
-            f"slope {v['slope']} | "
-            f"{v['phase']}"
-        )
-
-    return "\n".join(lines)
+    log_row({
+        "ts_unix_ms": now_ms,
+        "symbol": "MARKET",
+        "regime": "MARKET",
+        "mci": market_mci,
+        "mci_slope": market_slope,
+        "mci_phase": market_phase,
+        "mci_phase_confidence": market_conf,
+        "mci_phase_prob_top1": market_p1,
+        "mci_phase_prob_top2": market_p2,
+        "market_calm_ratio": market_state["calm_ratio"],
+        "alert": "MARKET_STATE",
+    })
+    last_market_log_ts = now_ms
 
 def log_row(row):
     exists = os.path.isfile(HISTORY_FILE)
@@ -423,6 +348,10 @@ def log_alert(symbol, alert_type, mci, slope, phase):
             "mci": mci,
             "mci_slope": slope,
             "mci_phase": phase,
+            "mci_phase_confidence": None,
+            "mci_phase_prob_top1": None,
+            "mci_phase_prob_top2": None,
+            "market_calm_ratio": None,
             "alert": alert_type,
         })
 
@@ -436,27 +365,19 @@ def maybe_alert(symbol, phase, mci, slope):
         if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
             alert_ts[symbol]["CALM_COMPRESSION"] = now_ms
             log_alert(symbol, "CALM_COMPRESSION", mci, slope, phase)
-            if SEND_ALERTS_TO_TG:
-                tg_send(f"⚠️ {symbol} CALM_COMPRESSION")
 
         if mci > 0.4 and slope < 0 and ok("CALM_DECAY"):
             alert_ts[symbol]["CALM_DECAY"] = now_ms
             log_alert(symbol, "CALM_DECAY", mci, slope, phase)
-            if SEND_ALERTS_TO_TG:
-                tg_send(f"⚠️ {symbol} CALM_DECAY")
 
         if mci < 0.2 and slope < 0 and ok("DIRECTIONAL_PRESSURE"):
             alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now_ms
             log_alert(symbol, "DIRECTIONAL_PRESSURE", mci, slope, phase)
-            if SEND_ALERTS_TO_TG:
-                tg_send(f"⚠️ {symbol} DIRECTIONAL_PRESSURE")
 
 
         if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
             alert_ts[symbol]["PHASE_SHIFT"] = now_ms
             log_alert(symbol, f"PHASE_SHIFT:{phase}", mci, slope, phase)
-            if SEND_ALERTS_TO_TG:
-                tg_send(f"🔁 {symbol} PHASE_SHIFT → {phase}")
             last_phase[symbol] = phase
 
 
@@ -469,9 +390,8 @@ def daily_sender(stop_event):
         now = datetime.now(timezone.utc)
         if now.hour == 11 and now.minute < 2:
             if os.path.isfile(HISTORY_FILE):
-                tg_send("📎 Daily options log")
                 with open(HISTORY_FILE, "rb") as f:
-                    tg_requests.post(
+                    requests.post(
                         f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
                         data={"chat_id": TG_CHAT_ID},
                         files={"document": f},
@@ -486,14 +406,8 @@ def main():
     print("BOOT OK", flush=True)
     print("Options Market Regime Engine started", flush=True)
 
-    def tg_loop():
-        while not stop_event.is_set():
-            tg_poll()
-            stop_event.wait(5)
-
     threading.Thread(target=run_http_server, daemon=True).start()
     threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
-    threading.Thread(target=tg_loop, daemon=True).start()
     try:
         while True:
             cycle_start = time.time()
@@ -515,6 +429,9 @@ def main():
                     if phase:
                         phase_hist[s].append(phase)
 
+                    confidence = phase_confidence(mci, slope, list(phase_hist[s]))
+                    prob_top1, prob_top2 = top_phase_probabilities(mci, slope)
+
                     last_state[s] = {
                         "regime": r,
                         "mci": mci,
@@ -531,6 +448,11 @@ def main():
                         "mci": mci,
                         "mci_slope": slope,
                         "mci_phase": phase,
+                        "mci_phase_confidence": confidence,
+                        "mci_phase_prob_top1": prob_top1,
+                        "mci_phase_prob_top2": prob_top2,
+                        "market_calm_ratio": None,
+                        "alert": None,
                     })
         
                     print(s, r, mci, slope, phase, flush=True)
@@ -558,7 +480,12 @@ def main():
                 "phase": market_phase,
                 "calm_ratio": market_calm_ratio,
             })
-        
+
+            if market_phase:
+                market_phase_hist.append(market_phase)
+
+            maybe_log_market_state()
+
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
                 time.sleep(sleep_for)
@@ -569,8 +496,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
 
