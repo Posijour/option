@@ -319,18 +319,22 @@ def log_row(row):
         w.writerow(row.values())
 
 def log_alert(symbol, alert_type, mci, slope, phase):
-    if not LOG_ALERTS:
-        return
+    ts = now_ts_ms()
+    print(
+        f"ALERT {symbol} {alert_type} mci={mci} slope={slope} phase={phase} ts={ts}",
+        flush=True
+    )
 
-    log_row({
-        "ts_unix_ms": now_ts_ms(),
-        "symbol": symbol,
-        "regime": "",
-        "mci": mci,
-        "mci_slope": slope,
-        "mci_phase": phase,
-        "alert": alert_type,
-    })
+    if LOG_ALERTS:
+        log_row({
+            "ts_unix_ms": ts,
+            "symbol": symbol,
+            "regime": "",
+            "mci": mci,
+            "mci_slope": slope,
+            "mci_phase": phase,
+            "alert": alert_type,
+        })
 
 # ---------- ALERTS (MS) ----------
 def maybe_alert(symbol, phase, mci, slope):
@@ -468,5 +472,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
