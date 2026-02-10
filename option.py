@@ -16,7 +16,7 @@ SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 LOG_ALERTS = True          # ✅ CSV on
 
 CHECK_INTERVAL = 300  # 5 min
-MARKET_LOG_INTERVAL = 1800  # 30 min
+MARKET_LOG_INTERVAL = 30 * 60  # 30 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
 
@@ -328,20 +328,22 @@ def maybe_log_market_state():
         "alert": "MARKET_STATE",
     })
 
+    print(
+        "MARKET_STATE "
+        f"ts={now_ms} mci={market_mci} slope={market_slope} "
+        f"phase={market_phase} conf={market_conf} "
+        f"p1={market_p1} p2={market_p2} calm_ratio={market_state['calm_ratio']}",
+        flush=True
+    )
+
     for symbol in SYMBOLS:
         state = last_state.get(symbol)
         if not state:
             continue
 
-        symbol_conf = phase_confidence(
-            state.get("mci"),
-            state.get("slope"),
-            list(phase_hist[symbol])
-        )
-        symbol_p1, symbol_p2 = top_phase_probabilities(
-            state.get("mci"),
-            state.get("slope")
-        )
+        symbol_conf = state.get("confidence")
+        symbol_p1 = state.get("prob_top1")
+        symbol_p2 = state.get("prob_top2")
 
         log_row({
             "ts_unix_ms": now_ms,
@@ -356,6 +358,15 @@ def maybe_log_market_state():
             "market_calm_ratio": market_state["calm_ratio"],
             "alert": "MARKET_STATE_TICKER",
         })
+
+        print(
+            "MARKET_STATE_TICKER "
+            f"ts={now_ms} symbol={symbol} regime={state.get('regime')} "
+            f"mci={state.get('mci')} slope={state.get('slope')} "
+            f"phase={state.get('phase')} conf={symbol_conf} "
+            f"p1={symbol_p1} p2={symbol_p2}",
+            flush=True
+        )
 
     print(f"MARKET SNAPSHOT logged at {datetime.now(timezone.utc)}", flush=True)
     while next_market_log_ts <= now_ms:
@@ -535,4 +546,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
