@@ -16,7 +16,7 @@ SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 LOG_ALERTS = True          # ✅ CSV on
 
 CHECK_INTERVAL = 300  # 5 min
-MARKET_LOG_INTERVAL = 1800  # 30 min
+MARKET_LOG_INTERVAL = 30 * 60  # 30 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
 
@@ -182,7 +182,7 @@ mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
 last_phase = {s: None for s in SYMBOLS}
 phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
 market_phase_hist = deque(maxlen=6)
-last_market_log_ts = 0
+next_market_log_ts = None
 
 last_state = {}
 market_state = {
@@ -298,10 +298,14 @@ def top_phase_probabilities(mci, slope):
 
 
 def maybe_log_market_state():
-    global last_market_log_ts
+    global next_market_log_ts
 
     now_ms = now_ts_ms()
-    if now_ms - last_market_log_ts < MARKET_LOG_INTERVAL * 1000:
+    if next_market_log_ts is None:
+        next_market_log_ts = now_ms + MARKET_LOG_INTERVAL * 1000
+        return
+
+    if now_ms < next_market_log_ts:
         return
 
     market_mci = market_state["mci"]
@@ -353,8 +357,9 @@ def maybe_log_market_state():
             "alert": "MARKET_STATE_TICKER",
         })
 
-    last_market_log_ts = now_ms
-
+    print(f"MARKET SNAPSHOT logged at {datetime.now(timezone.utc)}", flush=True)
+    while next_market_log_ts <= now_ms:
+        next_market_log_ts += MARKET_LOG_INTERVAL * 1000
 
 def log_row(row):
     exists = os.path.isfile(HISTORY_FILE)
@@ -530,6 +535,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
