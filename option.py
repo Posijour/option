@@ -10,7 +10,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ================== CONFIG ==================
 
-BASE_URL = "https://api.bybit.com"
+BYBIT_BASE_URL = "https://api.bybit.com"
+OKX_BASE_URL = "https://www.okx.com"
+
 SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 
 LOG_ALERTS = True          # ✅ CSV on
@@ -24,6 +26,8 @@ CREDIT_CHEAP = 0.30
 CREDIT_EXPENSIVE = 0.15
 SKEW_DOWN = 1.20
 SKEW_UP = 0.90
+
+IV_THRESHOLD = 0.02
 
 NEAR_MIN = 0
 NEAR_MAX = 3
@@ -76,12 +80,38 @@ def run_http_server():
 # ---------- API ----------
 def get_option_tickers(symbol):
     r = requests.get(
-        f"{BASE_URL}/v5/market/tickers",
+        f"{BYBIT_BASE_URL}/v5/market/tickers",
         params={"category": "option", "baseCoin": symbol},
         timeout=10
     )
     r.raise_for_status()
     return r.json()["result"]["list"]
+
+def get_okx_option_instruments(symbol):
+    r = requests.get(
+        f"{OKX_BASE_URL}/api/v5/public/instruments",
+        params={
+            "instType": "OPTION",
+            "uly": f"{symbol}-USD"
+        },
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.json()["data"]
+
+
+def get_okx_tickers():
+    r = requests.get(
+        f"{OKX_BASE_URL}/api/v5/market/tickers",
+        params={
+            "instType": "OPTION"
+        },
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.json()["data"]
+
+
 
 # ---------- PARSER ----------
 def parse_symbol(sym):
@@ -92,6 +122,17 @@ def parse_symbol(sym):
         "strike": float(p[2]),
         "type": "CALL" if p[3] == "C" else "PUT",
     }
+
+def parse_okx_symbol(inst_id):
+    # пример: BTC-USD-240329-70000-C
+    p = inst_id.split("-")
+    return {
+        "base": p[0],
+        "expiry": datetime.strptime(p[2], "%y%m%d").replace(tzinfo=timezone.utc),
+        "strike": float(p[3]),
+        "type": "CALL" if p[4] == "C" else "PUT",
+    }
+
 
 # ---------- OPTION CHAIN ----------
 def build_option_chain(symbol):
@@ -107,6 +148,41 @@ def build_option_chain(symbol):
             })
         except Exception:
             continue
+    return out
+
+def build_okx_option_chain(symbol):
+    instruments = get_okx_option_instruments(symbol)
+    tickers = get_okx_tickers()
+
+    ticker_map = {t["instId"]: t for t in tickers}
+
+    out = []
+
+    debug_printed = False
+
+    for inst in instruments:
+        inst_id = inst["instId"]
+
+        if inst_id not in ticker_map:
+            continue
+
+        try:
+            parsed = parse_okx_symbol(inst_id)
+            t = ticker_map[inst_id]
+
+            bid = float(t.get("bidPx") or 0)
+
+            if bid > 0:
+                out.append({
+                    **parsed,
+                    "bid": bid,
+                    "ask": bid,
+                    "iv": bid,
+                })
+
+        except Exception:
+            continue
+
     return out
 
 # ---------- SPREAD SENSOR ----------
@@ -161,7 +237,7 @@ def regime_for_expiry(opts):
         return "DIRECTIONAL_UP"
     return "UNCERTAIN"
 
-def interpret_market(symbol):
+def interpret_bybit_market(symbol):
     chain = build_option_chain(symbol)
     now = datetime.now(timezone.utc)
     near, mid = [], []
@@ -176,9 +252,56 @@ def interpret_market(symbol):
     r1, r2 = regime_for_expiry(near), regime_for_expiry(mid)
     return r1 if r1 == r2 else "UNCERTAIN"
 
+def get_okx_spot(symbol):
+    r = requests.get(
+        f"{OKX_BASE_URL}/api/v5/market/index-tickers",
+        params={"instId": f"{symbol}-USD"},
+        timeout=10
+    )
+    r.raise_for_status()
+    data = r.json()["data"]
+    if not data:
+        return None
+    return float(data[0]["idxPx"])
+
+def get_okx_atm_iv(symbol):
+    chain = build_okx_option_chain(symbol)
+    if not chain:
+        return None
+
+    spot = get_okx_spot(symbol)
+    if not spot:
+        return None
+
+    # оставляем только опционы near expiry
+    now = datetime.now(timezone.utc)
+    near_opts = []
+
+    for o in chain:
+        dte = (o["expiry"] - now).days
+        if NEAR_MIN <= dte <= NEAR_MAX:
+            near_opts.append(o)
+
+    if not near_opts:
+        return None
+
+    # ищем страйк максимально близкий к spot
+    atm = min(near_opts, key=lambda x: abs(x["strike"] - spot))
+
+    return atm["iv"] if atm["iv"] > 0 else None
+
+
+def interpret_okx_market(symbol):
+    iv = get_okx_atm_iv(symbol)
+    return iv
+
 # ---------- STATE ----------
 regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
 mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
+OKX_SYMBOLS = ["BTC", "ETH"]
+
+okx_iv_hist = {s: deque(maxlen=MCI_WINDOW) for s in OKX_SYMBOLS}
+
 last_phase = {s: None for s in SYMBOLS}
 phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
 market_phase_hist = deque(maxlen=6)
@@ -206,6 +329,65 @@ def calc_slope(symbol):
         return None
     half = MCI_WINDOW // 2
     return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
+
+def calc_okx_iv(symbol):
+    h = okx_iv_hist[symbol]
+    if len(h) < MCI_WINDOW:
+        return None
+    return round(sum(h)/len(h), 4)
+
+def calc_market_iv_slope():
+    slopes = []
+
+    for s in OKX_SYMBOLS:
+        val = calc_okx_iv_slope(s)
+        if val is not None:
+            slopes.append(val)
+
+    if not slopes:
+        return None
+
+    return round(sum(slopes) / len(slopes), 4)
+
+def classify_miti(slope):
+    if slope is None:
+        return None
+
+    if slope > 0.15:
+        return "IV_EXPANDING_STRONG"
+    if slope > 0.05:
+        return "IV_EXPANDING"
+    if slope < -0.15:
+        return "IV_CRUSH_STRONG"
+    if slope < -0.05:
+        return "IV_CRUSH"
+
+    return "IV_NEUTRAL"
+
+def calc_okx_iv_slope(symbol):
+    h = list(okx_iv_hist[symbol])
+    if len(h) < MCI_WINDOW:
+        return None
+
+    first = h[0]
+    last = h[-1]
+
+    if first == 0:
+        return None
+
+    return round((last - first) / first, 4)
+
+def classify_market_iv(slope):
+    if slope is None:
+        return None
+
+    if slope > IV_THRESHOLD:
+        return "IV_EXPANSION"
+
+    if slope < -0.01:
+        return "IV_CRUSH"
+
+    return "IV_STABLE"
 
 def mean(values):
     values = [v for v in values if v is not None]
@@ -317,14 +499,22 @@ def maybe_log_market_state():
     log_row({
         "ts_unix_ms": now_ms,
         "symbol": "MARKET",
-        "regime": "MARKET",
+    
+        # MCI
         "mci": market_mci,
         "mci_slope": market_slope,
         "mci_phase": market_phase,
         "mci_phase_confidence": market_conf,
         "mci_phase_prob_top1": market_p1,
         "mci_phase_prob_top2": market_p2,
+    
+        # MITI
+        "miti_slope": market_state.get("iv_slope"),
+        "miti_regime": market_state.get("iv_regime"),
+    
+        # structure
         "market_calm_ratio": market_state["calm_ratio"],
+    
         "alert": "MARKET_STATE",
     })
 
@@ -463,24 +653,89 @@ def main():
             # ====== 1. СЧИТАЕМ ТИКЕРЫ ======
             for s in SYMBOLS:
                 try:
-                    r = interpret_market(s)
-                    if not r:
+                    divergence = None
+                    divergence_diff = None
+                    
+                    bybit_r = interpret_bybit_market(s)
+
+                    okx_r = None
+                    if s in OKX_SYMBOLS:
+                        okx_r = interpret_okx_market(s)
+
+                    if not bybit_r and not okx_r:
                         continue
-        
-                    regime_hist[s].append(r)
-                    mci_hist[s].append(mci_value(r))
-        
+
+                    if bybit_r:
+                        regime_hist[s].append(bybit_r)
+                        mci_hist[s].append(mci_value(bybit_r))
+
+                    if s in OKX_SYMBOLS:
+                        okx_iv = okx_r
+                        if okx_iv:
+                            okx_iv_hist[s].append(okx_iv)
+
                     mci = calc_mci(s)
                     slope = calc_slope(s)
+                    okx_iv_avg = None
+                    okx_iv_slope = None
+
+                    if s in OKX_SYMBOLS:
+                        okx_iv_avg = calc_okx_iv(s)
+                        okx_iv_slope = calc_okx_iv_slope(s)
+                    
+                    if s in OKX_SYMBOLS and okx_iv_avg is not None:
+                        print("OKX", s, okx_iv_avg, okx_iv_slope, flush=True)
+
+                                        # ===== DIVERGENCE ENGINE (Slope-based) =====
+                    if s in OKX_SYMBOLS and slope is not None and okx_iv_slope is not None:
+                        divergence_diff = round(slope - okx_iv_slope, 4)
+
+                        if abs(divergence_diff) >= 1.0:
+                            divergence = "EXTREME"
+                        elif abs(divergence_diff) >= 0.6:
+                            divergence = "STRONG"
+                        elif abs(divergence_diff) >= 0.3:
+                            divergence = "MODERATE"
+                        else:
+                            divergence = "NONE"
+
+                        print("DIVERGENCE", s, "diff=", divergence_diff, divergence, flush=True)
+
+                    # ===== PHASE CALCULATION =====
                     phase = mci_phase(mci, slope)
                     if phase:
                         phase_hist[s].append(phase)
+
+                    # ===== IV PHASE (OKX ATM IV regime) =====
+                    iv_phase = None
+
+                    if okx_iv_slope is not None:
+                        if okx_iv_slope > IV_THRESHOLD:
+                            iv_phase = "IV_EXPANDING"
+                        elif okx_iv_slope < -IV_THRESHOLD:
+                            iv_phase = "IV_CRUSH"
+                        else:
+                            iv_phase = "IV_FLAT"
+
+                    # ===== PHASE DIVERGENCE (Structure vs Volatility) =====
+                    phase_divergence = None
+
+                    if phase and iv_phase:
+
+                        if phase in ["OVERCOMPRESSED", "ACCUMULATING_CALM"] and iv_phase == "IV_EXPANDING":
+                            phase_divergence = "PRE_BREAK_TENSION"
+
+                        elif phase == "RELEASING" and iv_phase == "IV_CRUSH":
+                            phase_divergence = "POST_MOVE_DECAY"
+
+                        elif phase in ["OVERCOMPRESSED", "STABLE_CALM"] and iv_phase == "IV_CRUSH":
+                            phase_divergence = "FALSE_COMPRESSION"
 
                     confidence = phase_confidence(mci, slope, list(phase_hist[s]))
                     prob_top1, prob_top2 = top_phase_probabilities(mci, slope)
 
                     last_state[s] = {
-                        "regime": r,
+                        "regime": bybit_r,
                         "mci": mci,
                         "slope": slope,
                         "phase": phase,
@@ -494,22 +749,29 @@ def main():
                     log_row({
                         "ts_unix_ms": now_ts_ms(),
                         "symbol": s,
-                        "regime": r,
+                        "regime": bybit_r,
                         "mci": mci,
                         "mci_slope": slope,
                         "mci_phase": phase,
                         "mci_phase_confidence": confidence,
                         "mci_phase_prob_top1": prob_top1,
                         "mci_phase_prob_top2": prob_top2,
+                        "okx_iv_avg": okx_iv_avg,
+                        "okx_iv_slope": okx_iv_slope,
+                        "divergence": divergence,
+                        "divergence_diff": divergence_diff,
+                        "iv_phase": iv_phase,
+                        "phase_divergence": phase_divergence,
                         "market_calm_ratio": None,
+                        "miti_regime": market_state.get("iv_regime"),
                         "alert": None,
                     })
         
-                    print(s, r, mci, slope, phase, flush=True)
+                    print("BYBIT", s, bybit_r, mci, slope, phase, flush=True)
         
                 except Exception as e:
                     print(s, "ERROR:", e, flush=True)
-        
+            
             # ====== 2. СЧИТАЕМ РЫНОК ЦЕЛИКОМ ======
             mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
             slope_vals = [v["slope"] for v in last_state.values() if v["slope"] is not None]
@@ -524,11 +786,16 @@ def main():
             calm_count = sum(1 for v in last_state.values() if v["regime"] == "CALM")
             market_calm_ratio = round(calm_count / len(last_state), 2) if last_state else None
         
+            market_iv_slope = calc_market_iv_slope()
+            market_iv_regime = classify_market_iv(market_iv_slope)
+            
             market_state.update({
                 "mci": market_mci,
                 "slope": market_slope,
                 "phase": market_phase,
                 "calm_ratio": market_calm_ratio,
+                "iv_slope": market_iv_slope,
+                "iv_regime": market_iv_regime,
             })
 
             if market_phase:
