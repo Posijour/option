@@ -8,6 +8,31 @@ import threading
 from threading import Event
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import requests
+
+SUPABASE_URL = "ВСТАВЬ_URL"
+SUPABASE_KEY = "ВСТАВЬ_KEY"
+
+def send_to_db(event, payload):
+    try:
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/logs",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Content-Type": "application/json"
+            },
+            json={
+                "ts": int(time.time()*1000),
+                "event": event,
+                "symbol": payload.get("symbol"),
+                "data": payload
+            },
+            timeout=3
+        )
+    except:
+        pass
+
+
 # ================== CONFIG ==================
 
 BYBIT_BASE_URL = "https://api.bybit.com"
@@ -496,7 +521,7 @@ def maybe_log_market_state():
     market_conf = phase_confidence(market_mci, market_slope, list(market_phase_hist))
     market_p1, market_p2 = top_phase_probabilities(market_mci, market_slope)
 
-    log_row({
+    row = {
         "ts_unix_ms": now_ms,
         "symbol": "MARKET",
     
@@ -516,8 +541,10 @@ def maybe_log_market_state():
         "market_calm_ratio": market_state["calm_ratio"],
     
         "alert": "MARKET_STATE",
-    })
-
+    }
+    log_row(row)
+    send_to_db("options_market_state", row)
+    
     print(
         "MARKET_STATE "
         f"ts={now_ms} mci={market_mci} slope={market_slope} "
@@ -535,7 +562,7 @@ def maybe_log_market_state():
         symbol_p1 = state.get("prob_top1")
         symbol_p2 = state.get("prob_top2")
 
-        log_row({
+        row = {
             "ts_unix_ms": now_ms,
             "symbol": symbol,
             "regime": state.get("regime"),
@@ -547,8 +574,10 @@ def maybe_log_market_state():
             "mci_phase_prob_top2": symbol_p2,
             "market_calm_ratio": market_state["calm_ratio"],
             "alert": "MARKET_STATE_TICKER",
-        })
-
+        }
+        log_row(row)
+        send_to_db("options_ticker_state", row)
+        
         print(
             "MARKET_STATE_TICKER "
             f"ts={now_ms} symbol={symbol} regime={state.get('regime')} "
@@ -813,5 +842,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
