@@ -527,18 +527,12 @@ def maybe_log_market_state():
         "mci": market_mci,
         "mci_slope": market_slope,
         "mci_phase": market_phase,
-        "mci_phase_confidence": market_conf,
-        "mci_phase_prob_top1": market_p1,
-        "mci_phase_prob_top2": market_p2,
     
         # MITI
-        "miti_slope": market_state.get("iv_slope"),
         "miti_regime": market_state.get("iv_regime"),
     
         # structure
         "market_calm_ratio": market_state["calm_ratio"],
-    
-        "alert": "MARKET_STATE",
     }
     log_row(row)
     send_to_db("options_market_state", row)
@@ -567,11 +561,7 @@ def maybe_log_market_state():
             "mci": state.get("mci"),
             "mci_slope": state.get("slope"),
             "mci_phase": state.get("phase"),
-            "mci_phase_confidence": symbol_conf,
-            "mci_phase_prob_top1": symbol_p1,
-            "mci_phase_prob_top2": symbol_p2,
             "market_calm_ratio": market_state["calm_ratio"],
-            "alert": "MARKET_STATE_TICKER",
         }
         log_row(row)
         send_to_db("options_ticker_state", row)
@@ -787,8 +777,6 @@ def main():
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
                 time.sleep(sleep_for)
-                
-            send_to_db("test_ping", {"symbol": "TEST", "hello": "world"})
 
     except KeyboardInterrupt:
         stop_event.set()
@@ -796,3 +784,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
