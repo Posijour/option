@@ -683,7 +683,6 @@ def main():
                         elif abs(divergence_diff) >= 0.3:
                             divergence = "MODERATE"
                         else:
-                            else:
                             divergence = "NONE"
 
                         send_to_db("okx_divergence", {
@@ -811,5 +810,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
