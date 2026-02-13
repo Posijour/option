@@ -15,22 +15,29 @@ SUPABASE_KEY = "sb_publishable_VsMaZGz98nm5lSQZJ-g-kQ_bUOfSO_r"
 
 def send_to_db(event, payload):
     try:
-        requests.post(
+        r = requests.post(
             f"{SUPABASE_URL}/rest/v1/logs",
             headers={
                 "apikey": SUPABASE_KEY,
-                "Content-Type": "application/json"
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
             },
             json={
-                "ts": int(time.time()*1000),
+                "ts": int(time.time() * 1000),
                 "event": event,
                 "symbol": payload.get("symbol"),
                 "data": payload
             },
-            timeout=3
+            timeout=5
         )
-    except:
-        pass
+
+        # ВАЖНО ДЛЯ ОТЛАДКИ (временно)
+        if r.status_code >= 300:
+            print("SUPABASE ERROR", r.status_code, r.text, flush=True)
+
+    except Exception as e:
+        print("SUPABASE EXCEPTION", e, flush=True)
 
 
 # ================== CONFIG ==================
@@ -835,6 +842,8 @@ def main():
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
                 time.sleep(sleep_for)
+                
+            send_to_db("test_ping", {"symbol": "TEST", "hello": "world"})
 
     except KeyboardInterrupt:
         stop_event.set()
@@ -842,6 +851,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
