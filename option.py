@@ -3,7 +3,7 @@ import time
 import csv
 import os
 from datetime import datetime, timezone
-from collections import defaultdict, deque
+from collections import deque
 import threading
 from threading import Event
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -47,9 +47,8 @@ OKX_BASE_URL = "https://www.okx.com"
 
 SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 
-LOG_ALERTS = True          # ✅ CSV on
 
-CHECK_INTERVAL = 600  # 10 min
+CHECK_INTERVAL = 300  # 5 min
 MARKET_LOG_INTERVAL = 30 * 60  # 30 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
@@ -73,12 +72,6 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 PORT = int(os.getenv("PORT", "10000"))
 
-ALERT_COOLDOWN = {
-    "CALM_COMPRESSION": 60,
-    "CALM_DECAY": 30,
-    "DIRECTIONAL_PRESSURE": 30,
-    "PHASE_SHIFT": 60,
-}
 
 # ============================================
 
@@ -334,7 +327,6 @@ OKX_SYMBOLS = ["BTC", "ETH"]
 
 okx_iv_hist = {s: deque(maxlen=MCI_WINDOW) for s in OKX_SYMBOLS}
 
-last_phase = {s: None for s in SYMBOLS}
 phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
 market_phase_hist = deque(maxlen=6)
 next_market_log_ts = None
@@ -346,7 +338,6 @@ market_state = {
     "phase": None,
     "calm_ratio": None,
 }
-alert_ts = defaultdict(dict)
 
 def mci_value(reg):
     return 1 if reg == "CALM" else -1 if reg.startswith("DIRECTIONAL") else 0
@@ -606,58 +597,6 @@ def log_row(row):
             w.writerow(row.keys())
         w.writerow(row.values())
 
-def log_alert(symbol, alert_type, mci, slope, phase):
-    ts = now_ts_ms()
-    payload = {
-        "ts_unix_ms": ts,
-        "symbol": symbol,
-        "regime": "",
-        "mci": mci,
-        "mci_slope": slope,
-        "mci_phase": phase,
-        "mci_phase_confidence": None,
-        "mci_phase_prob_top1": None,
-        "mci_phase_prob_top2": None,
-        "market_calm_ratio": None,
-        "alert": alert_type,
-    }
-
-    print(
-        f"ALERT {symbol} {alert_type} mci={mci} slope={slope} phase={phase} ts={ts}",
-        flush=True
-    )
-
-    if LOG_ALERTS:
-        log_row(payload)
-
-    send_to_db("options_alert", payload)
-
-# ---------- ALERTS (MS) ----------
-def maybe_alert(symbol, phase, mci, slope):
-    now_ms = now_ts_ms()
-    def ok(t):
-        return now_ms - alert_ts[symbol].get(t, 0) > ALERT_COOLDOWN[t] * 60 * 1000
-
-    if mci is not None and slope is not None:
-        if mci > 0.7 and abs(slope) < 0.01 and ok("CALM_COMPRESSION"):
-            alert_ts[symbol]["CALM_COMPRESSION"] = now_ms
-            log_alert(symbol, "CALM_COMPRESSION", mci, slope, phase)
-
-        if mci > 0.4 and slope < 0 and ok("CALM_DECAY"):
-            alert_ts[symbol]["CALM_DECAY"] = now_ms
-            log_alert(symbol, "CALM_DECAY", mci, slope, phase)
-
-        if mci < 0.2 and slope < 0 and ok("DIRECTIONAL_PRESSURE"):
-            alert_ts[symbol]["DIRECTIONAL_PRESSURE"] = now_ms
-            log_alert(symbol, "DIRECTIONAL_PRESSURE", mci, slope, phase)
-
-
-        if phase and phase != last_phase[symbol] and ok("PHASE_SHIFT"):
-            alert_ts[symbol]["PHASE_SHIFT"] = now_ms
-            log_alert(symbol, f"PHASE_SHIFT:{phase}", mci, slope, phase)
-            last_phase[symbol] = phase
-
-
 # ---------- DAILY LOG ----------
 def daily_sender(stop_event):
     if not TG_TOKEN or not TG_CHAT_ID:
@@ -784,7 +723,6 @@ def main():
                         "prob_top2": prob_top2,
                     }
         
-                    maybe_alert(s, phase, mci, slope)
         
                     ticker_payload = {
                         "ts_unix_ms": now_ts_ms(),
@@ -850,6 +788,7 @@ def main():
             if sleep_for > 0:
                 time.sleep(sleep_for)
                 
+            send_to_db("test_ping", {"symbol": "TEST", "hello": "world"})
 
     except KeyboardInterrupt:
         stop_event.set()
@@ -857,11 +796,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
