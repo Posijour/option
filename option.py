@@ -608,25 +608,29 @@ def log_row(row):
 
 def log_alert(symbol, alert_type, mci, slope, phase):
     ts = now_ts_ms()
+    payload = {
+        "ts_unix_ms": ts,
+        "symbol": symbol,
+        "regime": "",
+        "mci": mci,
+        "mci_slope": slope,
+        "mci_phase": phase,
+        "mci_phase_confidence": None,
+        "mci_phase_prob_top1": None,
+        "mci_phase_prob_top2": None,
+        "market_calm_ratio": None,
+        "alert": alert_type,
+    }
+
     print(
         f"ALERT {symbol} {alert_type} mci={mci} slope={slope} phase={phase} ts={ts}",
         flush=True
     )
 
     if LOG_ALERTS:
-        log_row({
-            "ts_unix_ms": ts,
-            "symbol": symbol,
-            "regime": "",
-            "mci": mci,
-            "mci_slope": slope,
-            "mci_phase": phase,
-            "mci_phase_confidence": None,
-            "mci_phase_prob_top1": None,
-            "mci_phase_prob_top2": None,
-            "market_calm_ratio": None,
-            "alert": alert_type,
-        })
+        log_row(payload)
+
+    send_to_db("options_alert", payload)
 
 # ---------- ALERTS (MS) ----------
 def maybe_alert(symbol, phase, mci, slope):
@@ -782,7 +786,7 @@ def main():
         
                     maybe_alert(s, phase, mci, slope)
         
-                    log_row({
+                    ticker_payload = {
                         "ts_unix_ms": now_ts_ms(),
                         "symbol": s,
                         "regime": bybit_r,
@@ -801,7 +805,10 @@ def main():
                         "market_calm_ratio": None,
                         "miti_regime": market_state.get("iv_regime"),
                         "alert": None,
-                    })
+                    }
+
+                    log_row(ticker_payload)
+                    send_to_db("options_ticker_cycle", ticker_payload)
         
                     print("BYBIT", s, bybit_r, mci, slope, phase, flush=True)
         
@@ -851,6 +858,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
