@@ -850,7 +850,6 @@ def main():
             if sleep_for > 0:
                 time.sleep(sleep_for)
                 
-            send_to_db("test_ping", {"symbol": "TEST", "hello": "world"})
 
     except KeyboardInterrupt:
         stop_event.set()
@@ -858,6 +857,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
