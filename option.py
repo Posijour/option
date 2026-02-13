@@ -10,8 +10,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import requests
 
-SUPABASE_URL = "ВСТАВЬ_URL"
-SUPABASE_KEY = "ВСТАВЬ_KEY"
+SUPABASE_URL = "https://qcusrlmueapuqbjwuwvh.supabase.co"
+SUPABASE_KEY = "sb_publishable_VsMaZGz98nm5lSQZJ-g-kQ_bUOfSO_r"
 
 def send_to_db(event, payload):
     try:
@@ -842,6 +842,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
