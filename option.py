@@ -2,6 +2,7 @@ import requests
 import time
 import csv
 import os
+import math
 from datetime import datetime, timezone
 from collections import deque
 import threading
@@ -13,8 +14,18 @@ import requests
 SUPABASE_URL = "https://qcusrlmueapuqbjwuwvh.supabase.co"
 SUPABASE_KEY = "sb_publishable_VsMaZGz98nm5lSQZJ-g-kQ_bUOfSO_r"
 
+def _sanitize_for_json(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(v) for v in value]
+    return value
+
 def send_to_db(event, payload):
     try:
+        safe_payload = _sanitize_for_json(payload)
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/logs",
             headers={
@@ -26,8 +37,8 @@ def send_to_db(event, payload):
             json={
                 "ts": int(time.time() * 1000),
                 "event": event,
-                "symbol": payload.get("symbol"),
-                "data": payload
+                "symbol": safe_payload.get("symbol"),
+                "data": safe_payload
             },
             timeout=5
         )
@@ -653,6 +664,12 @@ def main():
                         okx_iv_slope = calc_okx_iv_slope(s)
                     
                     if s in OKX_SYMBOLS and okx_iv_avg is not None:
+                        send_to_db("okx_atm_iv", {
+                            "ts_unix_ms": now_ts_ms(),
+                            "symbol": s,
+                            "okx_iv_avg": okx_iv_avg,
+                            "okx_iv_slope": okx_iv_slope,
+                        })
                         print("OKX", s, okx_iv_avg, okx_iv_slope, flush=True)
 
                                         # ===== DIVERGENCE ENGINE (Slope-based) =====
@@ -666,7 +683,17 @@ def main():
                         elif abs(divergence_diff) >= 0.3:
                             divergence = "MODERATE"
                         else:
+                            else:
                             divergence = "NONE"
+
+                        send_to_db("okx_divergence", {
+                            "ts_unix_ms": now_ts_ms(),
+                            "symbol": s,
+                            "mci_slope": slope,
+                            "okx_iv_slope": okx_iv_slope,
+                            "divergence": divergence,
+                            "divergence_diff": divergence_diff,
+                        })
 
                         print("DIVERGENCE", s, "diff=", divergence_diff, divergence, flush=True)
 
@@ -784,4 +811,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
