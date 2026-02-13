@@ -49,7 +49,7 @@ SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
 
 LOG_ALERTS = True          # ✅ CSV on
 
-CHECK_INTERVAL = 300  # 5 min
+CHECK_INTERVAL = 600  # 10 min
 MARKET_LOG_INTERVAL = 30 * 60  # 30 min
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
@@ -857,6 +857,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
