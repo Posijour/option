@@ -1,6 +1,5 @@
 import requests
 import time
-import csv
 import os
 import math
 from datetime import datetime, timezone
@@ -8,8 +7,6 @@ from collections import deque
 import threading
 from threading import Event
 from http.server import BaseHTTPRequestHandler, HTTPServer
-
-import requests
 
 SUPABASE_URL = "https://qcusrlmueapuqbjwuwvh.supabase.co"
 SUPABASE_KEY = "sb_publishable_VsMaZGz98nm5lSQZJ-g-kQ_bUOfSO_r"
@@ -26,7 +23,7 @@ def _sanitize_for_json(value):
 def send_to_db(event, payload):
     try:
         safe_payload = _sanitize_for_json(payload)
-        r = requests.post(
+        requests.post(
             f"{SUPABASE_URL}/rest/v1/logs",
             headers={
                 "apikey": SUPABASE_KEY,
@@ -43,12 +40,8 @@ def send_to_db(event, payload):
             timeout=5
         )
 
-        # ВАЖНО ДЛЯ ОТЛАДКИ (временно)
-        if r.status_code >= 300:
-            print("SUPABASE ERROR", r.status_code, r.text, flush=True)
-
-    except Exception as e:
-        print("SUPABASE EXCEPTION", e, flush=True)
+    except Exception:
+        return
 
 
 # ================== CONFIG ==================
@@ -75,11 +68,6 @@ NEAR_MIN = 0
 NEAR_MAX = 3
 MID_MIN = 7
 MID_MAX = 14
-
-HISTORY_FILE = "market_regime_history.csv"
-
-TG_TOKEN = os.getenv("TG_TOKEN")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 PORT = int(os.getenv("PORT", "10000"))
 
@@ -110,7 +98,6 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_http_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"HTTP health server listening on port {PORT}", flush=True)
     server.serve_forever()
 
 # ---------- API ----------
@@ -194,7 +181,6 @@ def build_okx_option_chain(symbol):
 
     out = []
 
-    debug_printed = False
 
     for inst in instruments:
         inst_id = inst["instId"]
@@ -527,8 +513,6 @@ def maybe_log_market_state():
     market_mci = market_state["mci"]
     market_slope = market_state["slope"]
     market_phase = market_state["phase"]
-    market_conf = phase_confidence(market_mci, market_slope, list(market_phase_hist))
-    market_p1, market_p2 = top_phase_probabilities(market_mci, market_slope)
 
     row = {
         "ts_unix_ms": now_ms,
@@ -545,25 +529,13 @@ def maybe_log_market_state():
         # structure
         "market_calm_ratio": market_state["calm_ratio"],
     }
-    log_row(row)
     send_to_db("options_market_state", row)
-    
-    print(
-        "MARKET_STATE "
-        f"ts={now_ms} mci={market_mci} slope={market_slope} "
-        f"phase={market_phase} conf={market_conf} "
-        f"p1={market_p1} p2={market_p2} calm_ratio={market_state['calm_ratio']}",
-        flush=True
-    )
 
     for symbol in SYMBOLS:
         state = last_state.get(symbol)
         if not state:
             continue
 
-        symbol_conf = state.get("confidence")
-        symbol_p1 = state.get("prob_top1")
-        symbol_p2 = state.get("prob_top2")
 
         row = {
             "ts_unix_ms": now_ms,
@@ -574,61 +546,17 @@ def maybe_log_market_state():
             "mci_phase": state.get("phase"),
             "market_calm_ratio": market_state["calm_ratio"],
         }
-        log_row(row)
         send_to_db("options_ticker_state", row)
-        
-        print(
-            "MARKET_STATE_TICKER "
-            f"ts={now_ms} symbol={symbol} regime={state.get('regime')} "
-            f"mci={state.get('mci')} slope={state.get('slope')} "
-            f"phase={state.get('phase')} conf={symbol_conf} "
-            f"p1={symbol_p1} p2={symbol_p2}",
-            flush=True
-        )
 
-    print(f"MARKET SNAPSHOT logged at {datetime.now(timezone.utc)}", flush=True)
     while next_market_log_ts <= now_ms:
         next_market_log_ts += MARKET_LOG_INTERVAL * 1000
 
-def log_row(row):
-    exists = os.path.isfile(HISTORY_FILE)
-    with open(HISTORY_FILE, "a", newline="") as f:
-        w = csv.writer(f)
-        if not exists:
-            w.writerow(row.keys())
-        w.writerow(row.values())
-
-# ---------- DAILY LOG ----------
-def daily_sender(stop_event):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-
-    while not stop_event.is_set():
-        now = datetime.now(timezone.utc)
-        if now.hour == 11 and now.minute < 2:
-            if os.path.isfile(HISTORY_FILE):
-                with open(HISTORY_FILE, "rb") as f:
-                    requests.post(
-                        f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
-                        data={"chat_id": TG_CHAT_ID},
-                        files={"document": f},
-                        timeout=20
-                    )
-                open(HISTORY_FILE, "w").close()
-            stop_event.wait(120)
-        stop_event.wait(30)
-
 # ---------- MAIN ----------
 def main():
-    print("BOOT OK", flush=True)
-    print("Options Market Regime Engine started", flush=True)
-
     threading.Thread(target=run_http_server, daemon=True).start()
-    threading.Thread(target=daily_sender, args=(stop_event,), daemon=True).start()
     try:
         while True:
             cycle_start = time.time()
-            print("\nCycle:", datetime.now(timezone.utc), flush=True)
         
             # ====== 1. СЧИТАЕМ ТИКЕРЫ ======
             for s in SYMBOLS:
@@ -670,7 +598,6 @@ def main():
                             "okx_iv_avg": okx_iv_avg,
                             "okx_iv_slope": okx_iv_slope,
                         })
-                        print("OKX", s, okx_iv_avg, okx_iv_slope, flush=True)
 
                                         # ===== DIVERGENCE ENGINE (Slope-based) =====
                     if s in OKX_SYMBOLS and slope is not None and okx_iv_slope is not None:
@@ -694,7 +621,6 @@ def main():
                             "divergence_diff": divergence_diff,
                         })
 
-                        print("DIVERGENCE", s, "diff=", divergence_diff, divergence, flush=True)
 
                     # ===== PHASE CALCULATION =====
                     phase = mci_phase(mci, slope)
@@ -761,13 +687,10 @@ def main():
                         "alert": None,
                     }
 
-                    log_row(ticker_payload)
                     send_to_db("options_ticker_cycle", ticker_payload)
-        
-                    print("BYBIT", s, bybit_r, mci, slope, phase, flush=True)
-        
-                except Exception as e:
-                    print(s, "ERROR:", e, flush=True)
+
+                except Exception:
+                    continue
             
             # ====== 2. СЧИТАЕМ РЫНОК ЦЕЛИКОМ ======
             mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
@@ -806,10 +729,6 @@ def main():
 
     except KeyboardInterrupt:
         stop_event.set()
-        print("Shutting down", flush=True)
 
 if __name__ == "__main__":
     main()
-
-
-
