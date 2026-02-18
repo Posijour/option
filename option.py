@@ -2,6 +2,7 @@ import requests
 import time
 import os
 import math
+import logging
 from datetime import datetime, timezone
 from collections import deque
 import threading
@@ -76,6 +77,12 @@ PORT = int(os.getenv("PORT", "10000"))
 
 stop_event = Event()
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+logger = logging.getLogger("option-bot")
+
 # ---------- TIME (UNIFIED, MS) ----------
 def now_ts_ms():
     return int(time.time() * 1000)
@@ -98,20 +105,41 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_http_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    server.serve_forever()
+    server.timeout = 1
+    while not stop_event.is_set():
+        server.handle_request()
+
+
+def _safe_float(value):
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return None
+    return val if math.isfinite(val) else None
 
 # ---------- API ----------
+def _request_json(url, params=None, timeout=10, retries=2, backoff_s=1.0):
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            if attempt >= retries:
+                raise
+            time.sleep(backoff_s * (attempt + 1))
+
+
 def get_option_tickers(symbol):
-    r = requests.get(
+    data = _request_json(
         f"{BYBIT_BASE_URL}/v5/market/tickers",
         params={"category": "option", "baseCoin": symbol},
-        timeout=10
+        timeout=10,
     )
-    r.raise_for_status()
-    return r.json()["result"]["list"]
+    return data["result"]["list"]
 
 def get_okx_option_instruments(symbol):
-    r = requests.get(
+    data = _request_json(
         f"{OKX_BASE_URL}/api/v5/public/instruments",
         params={
             "instType": "OPTION",
@@ -119,20 +147,18 @@ def get_okx_option_instruments(symbol):
         },
         timeout=10
     )
-    r.raise_for_status()
-    return r.json()["data"]
+    return data["data"]
 
 
 def get_okx_tickers():
-    r = requests.get(
+    data = _request_json(
         f"{OKX_BASE_URL}/api/v5/market/tickers",
         params={
             "instType": "OPTION"
         },
         timeout=10
     )
-    r.raise_for_status()
-    return r.json()["data"]
+    return data["data"]
 
 
 
@@ -173,9 +199,9 @@ def build_option_chain(symbol):
             continue
     return out
 
-def build_okx_option_chain(symbol):
-    instruments = get_okx_option_instruments(symbol)
-    tickers = get_okx_tickers()
+def build_okx_option_chain(symbol, tickers=None):
+    instruments = get_okx_option_instruments(symbol)␊
+    tickers = tickers if tickers is not None else get_okx_tickers()
 
     ticker_map = {t["instId"]: t for t in tickers}
 
@@ -192,14 +218,16 @@ def build_okx_option_chain(symbol):
             parsed = parse_okx_symbol(inst_id)
             t = ticker_map[inst_id]
 
-            bid = float(t.get("bidPx") or 0)
+            bid = _safe_float(t.get("bidPx"))
+            ask = _safe_float(t.get("askPx"))
+            iv = _safe_float(t.get("markVol"))
 
-            if bid > 0:
+            if bid and ask:
                 out.append({
                     **parsed,
                     "bid": bid,
-                    "ask": bid,
-                    "iv": bid,
+                    "ask": ask,
+                    "iv": iv or 0,
                 })
 
         except Exception:
@@ -275,19 +303,18 @@ def interpret_bybit_market(symbol):
     return r1 if r1 == r2 else "UNCERTAIN"
 
 def get_okx_spot(symbol):
-    r = requests.get(
+    data = _request_json(
         f"{OKX_BASE_URL}/api/v5/market/index-tickers",
         params={"instId": f"{symbol}-USD"},
         timeout=10
     )
-    r.raise_for_status()
-    data = r.json()["data"]
+    data = data["data"]
     if not data:
         return None
     return float(data[0]["idxPx"])
 
-def get_okx_atm_iv(symbol):
-    chain = build_okx_option_chain(symbol)
+def get_okx_atm_iv(symbol, tickers=None):
+    chain = build_okx_option_chain(symbol, tickers=tickers)
     if not chain:
         return None
 
@@ -555,8 +582,14 @@ def maybe_log_market_state():
 def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     try:
-        while True:
+        while not stop_event.is_set():
             cycle_start = time.time()
+            okx_tickers_cache = None
+
+            try:
+                okx_tickers_cache = get_okx_tickers()
+            except Exception as e:
+                logger.warning("failed to fetch OKX tickers cache: %s", e)
         
             # ====== 1. СЧИТАЕМ ТИКЕРЫ ======
             for s in SYMBOLS:
@@ -568,7 +601,7 @@ def main():
 
                     okx_r = None
                     if s in OKX_SYMBOLS:
-                        okx_r = interpret_okx_market(s)
+                        okx_r = get_okx_atm_iv(s, tickers=okx_tickers_cache)
 
                     if not bybit_r and not okx_r:
                         continue
@@ -689,7 +722,8 @@ def main():
 
                     send_to_db("options_ticker_cycle", ticker_payload)
 
-                except Exception:
+                except Exception as e:
+                    logger.exception("cycle error for %s: %s", s, e)
                     continue
             
             # ====== 2. СЧИТАЕМ РЫНОК ЦЕЛИКОМ ======
@@ -729,6 +763,8 @@ def main():
 
     except KeyboardInterrupt:
         stop_event.set()
+        logger.info("shutdown requested")
 
 if __name__ == "__main__":
     main()
+
