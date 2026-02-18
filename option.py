@@ -200,7 +200,7 @@ def build_option_chain(symbol):
     return out
 
 def build_okx_option_chain(symbol, tickers=None):
-    instruments = get_okx_option_instruments(symbol)␊
+    instruments = get_okx_option_instruments(symbol)
     tickers = tickers if tickers is not None else get_okx_tickers()
 
     ticker_map = {t["instId"]: t for t in tickers}
@@ -767,4 +767,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
