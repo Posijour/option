@@ -338,15 +338,27 @@ def get_okx_atm_iv(symbol, tickers=None):
         return None
 
     # ищем страйк максимально близкий к spot
+    # 1. ВСЕГДА выбираем ATM по страйку
     atm = min(
-        (o for o in near_opts if o["iv"] is not None),
+        near_opts,
         key=lambda x: abs(x["strike"] - spot),
         default=None
     )
-    
+    logger.info(
+        "OKX %s ATM strike=%s IV=%s",
+        symbol,
+        atm["strike"],
+        atm["iv"]
+    )
+
     if atm is None:
-        logger.warning("OKX %s ATM not found", symbol)
+        logger.warning("OKX %s ATM not found (no near options)", symbol)
         return None
+    
+    # 2. IV берём, если есть, иначе 0.0
+    if atm["iv"] is None:
+        logger.warning("OKX %s ATM has no IV, using 0.0", symbol)
+        return 0.0
     
     return atm["iv"]
 
@@ -781,6 +793,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
