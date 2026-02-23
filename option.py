@@ -204,13 +204,10 @@ def build_okx_option_chain(symbol, tickers=None):
     tickers = tickers if tickers is not None else get_okx_tickers()
 
     ticker_map = {t["instId"]: t for t in tickers}
-
     out = []
-
 
     for inst in instruments:
         inst_id = inst["instId"]
-
         if inst_id not in ticker_map:
             continue
 
@@ -220,15 +217,15 @@ def build_okx_option_chain(symbol, tickers=None):
 
             bid = _safe_float(t.get("bidPx"))
             ask = _safe_float(t.get("askPx"))
-            iv = _safe_float(t.get("markVol"))
+            iv  = _safe_float(t.get("markVol"))
 
-            if bid and ask:
-                out.append({
-                    **parsed,
-                    "bid": bid,
-                    "ask": ask,
-                    "iv": iv or 0,
-                })
+            # ⬇⬇⬇ ГЛАВНОЕ ИЗМЕНЕНИЕ ⬇⬇⬇
+            out.append({
+                **parsed,
+                "bid": bid,
+                "ask": ask,
+                "iv": iv,
+            })
 
         except Exception:
             continue
@@ -335,9 +332,13 @@ def get_okx_atm_iv(symbol, tickers=None):
         return None
 
     # ищем страйк максимально близкий к spot
-    atm = min(near_opts, key=lambda x: abs(x["strike"] - spot))
+    atm = min(
+        (o for o in near_opts if o["iv"] is not None),
+        key=lambda x: abs(x["strike"] - spot),
+        default=None
+    )
 
-    return atm["iv"] if atm["iv"] > 0 else None
+return atm["iv"] if atm else None
 
 
 def interpret_okx_market(symbol):
@@ -612,8 +613,11 @@ def main():
 
                     if s in OKX_SYMBOLS:
                         okx_iv = okx_r
-                        if okx_iv:
+                        if okx_iv is not None:
                             okx_iv_hist[s].append(okx_iv)
+
+                    if s in OKX_SYMBOLS and okx_r is None:
+                        logger.warning("OKX IV NOT FOUND for %s", s)
 
                     mci = calc_mci(s)
                     slope = calc_slope(s)
@@ -767,5 +771,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
