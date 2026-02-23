@@ -217,7 +217,9 @@ def build_okx_option_chain(symbol, tickers=None):
 
             bid = _safe_float(t.get("bidPx"))
             ask = _safe_float(t.get("askPx"))
-            iv  = _safe_float(t.get("markVol"))
+            iv = _safe_float(t.get("markVol"))
+            if iv is not None:
+                iv = iv / 100
 
             # ⬇⬇⬇ ГЛАВНОЕ ИЗМЕНЕНИЕ ⬇⬇⬇
             out.append({
@@ -312,6 +314,8 @@ def get_okx_spot(symbol):
 
 def get_okx_atm_iv(symbol, tickers=None):
     chain = build_okx_option_chain(symbol, tickers=tickers)
+    logger.info("OKX %s total options=%d", symbol, len(chain))
+    
     if not chain:
         return None
 
@@ -322,11 +326,13 @@ def get_okx_atm_iv(symbol, tickers=None):
     # оставляем только опционы near expiry
     now = datetime.now(timezone.utc)
     near_opts = []
-
+    
     for o in chain:
-        dte = (o["expiry"] - now).days
-        if NEAR_MIN <= dte <= NEAR_MAX:
+        dte_hours = (o["expiry"] - now).total_seconds() / 3600
+        if 0 <= dte_hours <= 72:  # 3 дня
             near_opts.append(o)
+
+    logger.info("OKX %s near options=%d", symbol, len(near_opts))
 
     if not near_opts:
         return None
@@ -337,8 +343,12 @@ def get_okx_atm_iv(symbol, tickers=None):
         key=lambda x: abs(x["strike"] - spot),
         default=None
     )
-
-    return atm["iv"] if atm else None
+    
+    if atm is None:
+        logger.warning("OKX %s ATM not found", symbol)
+        return None
+    
+    return atm["iv"]
 
 
 def interpret_okx_market(symbol):
@@ -771,6 +781,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
