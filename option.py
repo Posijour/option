@@ -312,36 +312,41 @@ def get_okx_spot(symbol):
         return None
     return float(data[0]["idxPx"])
 
-
-def get_okx_atm_iv_from_summary(symbol):
-    data = _request_json(
-        f"{OKX_BASE_URL}/api/v5/market/option/summary",
-        params={
-            "uly": f"{symbol}-USD"
-        },
-        timeout=10
-    )
-
-    rows = data.get("data", [])
-    if not rows:
-        return None
-
-    iv = _safe_float(rows[0].get("atmVol"))
-    if iv is None:
-        return None
-
-    return iv / 100
     
 def get_okx_atm_iv(symbol, tickers=None):
-    iv = get_okx_atm_iv_from_summary(symbol)
-
-    if iv is None:
-        logger.warning("OKX %s ATM IV not available from summary", symbol)
+    chain = build_okx_option_chain(symbol, tickers=tickers)
+    if not chain:
         return None
 
-    logger.info("OKX %s ATM IV=%s", symbol, iv)
-    return iv
+    spot = get_okx_spot(symbol)
+    if not spot:
+        return None
 
+    now = datetime.now(timezone.utc)
+    near_opts = []
+
+    for o in chain:
+        dte_hours = (o["expiry"] - now).total_seconds() / 3600
+        if 0 <= dte_hours <= 72:
+            near_opts.append(o)
+
+    if not near_opts:
+        return None
+
+    # 1. ATM по страйку
+    atm = min(near_opts, key=lambda x: abs(x["strike"] - spot))
+
+    if atm["iv"] is not None:
+        return atm["iv"]
+
+    # 2. ближайший страйк с IV
+    with_iv = [o for o in near_opts if o["iv"] is not None]
+    if with_iv:
+        nearest = min(with_iv, key=lambda x: abs(x["strike"] - spot))
+        return nearest["iv"]
+
+    # 3. IV реально нет — возвращаем 0
+    return 0.0
 
 def interpret_okx_market(symbol):
     iv = get_okx_atm_iv(symbol)
@@ -773,6 +778,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
