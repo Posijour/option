@@ -317,8 +317,7 @@ def get_okx_atm_iv_from_summary(symbol):
     data = _request_json(
         f"{OKX_BASE_URL}/api/v5/market/option-summary",
         params={
-            "uly": f"{symbol}-USD",
-            "expTime": "near"
+            "uly": f"{symbol}-USD"
         },
         timeout=10
     )
@@ -327,8 +326,10 @@ def get_okx_atm_iv_from_summary(symbol):
     if not rows:
         return None
 
-    # OKX обычно кладёт ATM первым
-    iv = _safe_float(rows[0].get("atmVol"))
+    # берём первую строку — OKX кладёт агрегированную ATM IV
+    row = rows[0]
+
+    iv = _safe_float(row.get("atmVol"))
     if iv is None:
         return None
 
@@ -775,6 +776,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
