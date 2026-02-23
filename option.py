@@ -312,74 +312,37 @@ def get_okx_spot(symbol):
         return None
     return float(data[0]["idxPx"])
 
+
+def get_okx_atm_iv_from_summary(symbol):
+    data = _request_json(
+        f"{OKX_BASE_URL}/api/v5/market/option-summary",
+        params={
+            "uly": f"{symbol}-USD",
+            "expTime": "near"
+        },
+        timeout=10
+    )
+
+    rows = data.get("data", [])
+    if not rows:
+        return None
+
+    # OKX обычно кладёт ATM первым
+    iv = _safe_float(rows[0].get("atmVol"))
+    if iv is None:
+        return None
+
+    return iv / 100
+    
 def get_okx_atm_iv(symbol, tickers=None):
-    chain = build_okx_option_chain(symbol, tickers=tickers)
-    logger.info("OKX %s total options=%d", symbol, len(chain))
-    
-    if not chain:
+    iv = get_okx_atm_iv_from_summary(symbol)
+
+    if iv is None:
+        logger.warning("OKX %s ATM IV not available from summary", symbol)
         return None
 
-    spot = get_okx_spot(symbol)
-    if not spot:
-        return None
-
-    # оставляем только опционы near expiry
-    now = datetime.now(timezone.utc)
-    near_opts = []
-    
-    for o in chain:
-        dte_hours = (o["expiry"] - now).total_seconds() / 3600
-        if 0 <= dte_hours <= 72:  # 3 дня
-            near_opts.append(o)
-
-    logger.info("OKX %s near options=%d", symbol, len(near_opts))
-
-    if not near_opts:
-        return None
-
-    # ищем страйк максимально близкий к spot
-    # 1. ВСЕГДА выбираем ATM по страйку
-    # 1. Выбираем ATM по страйку
-    atm = min(
-        near_opts,
-        key=lambda x: abs(x["strike"] - spot),
-        default=None
-    )
-    
-    if atm is None:
-        logger.warning("OKX %s ATM not found", symbol)
-        return None
-    
-    # 2. Если у ATM есть IV — отлично
-    if atm["iv"] is not None:
-        logger.info(
-            "OKX %s ATM strike=%s IV=%s",
-            symbol,
-            atm["strike"],
-            atm["iv"]
-        )
-        return atm["iv"]
-    
-    # 3. ИНАЧЕ — fallback: ищем ближайший страйк с IV
-    with_iv = [o for o in near_opts if o["iv"] is not None]
-    
-    if not with_iv:
-        logger.warning("OKX %s no IV in near options, using 0.0", symbol)
-        return 0.0
-    
-    nearest_iv = min(
-        with_iv,
-        key=lambda x: abs(x["strike"] - spot)
-    )
-    
-    logger.warning(
-        "OKX %s ATM IV missing, using nearest IV strike=%s IV=%s",
-        symbol,
-        nearest_iv["strike"],
-        nearest_iv["iv"]
-    )
-    
-    return nearest_iv["iv"]
+    logger.info("OKX %s ATM IV=%s", symbol, iv)
+    return iv
 
 
 def interpret_okx_market(symbol):
@@ -812,6 +775,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
