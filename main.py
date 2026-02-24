@@ -165,10 +165,12 @@ def maybe_log_market_state():
 
 def main():
     threading.Thread(target=run_http_server, args=(stop_event,), daemon=True).start()
+    logger.info("service started: symbols=%s interval=%ss", ",".join(SYMBOLS), CHECK_INTERVAL)
     try:
         while not stop_event.is_set():
             cycle_start = time.time()
             okx_tickers_cache = None
+            logger.info("cycle started")
 
             try:
                 okx_tickers_cache = get_okx_tickers()
@@ -267,6 +269,10 @@ def main():
                     }
 
                     send_to_db("options_ticker_cycle", ticker_payload)
+                    logger.info(
+                        "ticker processed: symbol=%s bybit=%s okx_olsi=%s mci=%s slope=%s phase=%s",
+                        s, bybit_r, okx_olsi, mci, slope, phase
+                    )
 
                 except Exception as e:
                     logger.exception("cycle error for %s: %s", s, e)
@@ -301,6 +307,10 @@ def main():
                 market_phase_hist.append(market_phase)
 
             maybe_log_market_state()
+            logger.info(
+                "cycle finished: market_mci=%s market_slope=%s market_phase=%s calm_ratio=%s liquidity=%s",
+                market_mci, market_slope, market_phase, market_calm_ratio, market_olsi_regime
+            )
 
             sleep_for = CHECK_INTERVAL - (time.time() - cycle_start)
             if sleep_for > 0:
