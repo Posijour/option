@@ -63,7 +63,8 @@ CREDIT_EXPENSIVE = 0.15
 SKEW_DOWN = 1.20
 SKEW_UP = 0.90
 
-OLSI_THRESHOLD = 0.02
+OLSI_THRESHOLD = 0.05
+MIN_ACTIVE_OPTIONS = 10
 
 NEAR_MIN = 0
 NEAR_MAX = 3
@@ -307,48 +308,96 @@ def get_okx_near_chain(symbol, tickers=None):
             near_opts.append(o)
     return near_opts
 
-def okx_liquidity_structure_index(chain):
+
+def get_okx_spot(symbol):
+    data = _request_json(
+        f"{OKX_BASE_URL}/api/v5/market/index-tickers",
+        params={"instId": f"{symbol}-USD"},
+        timeout=10
+    )
+    data = data["data"]
+    if not data:
+        return None
+    return _safe_float(data[0].get("idxPx"))
+
+
+def atm_weight(strike, spot):
+    if spot is None or spot <= 0:
+        return 0.0
+    return math.exp(-abs(strike - spot) / spot)
+
+
+def okx_liquidity_structure_index(chain, spot, symbol=None):
     if not chain:
+        logger.debug("OLSI %s empty near chain", symbol or "N/A")
         return 0.0
 
-    active = [
-        o for o in chain
-        if o["bid"] is not None and o["ask"] is not None
-        and o["bid"] > 0 and o["ask"] > o["bid"]
-    ]
+    weighted_total = 0.0
+    weighted_active = 0.0
+    weighted_calls = 0.0
+    weighted_puts = 0.0
+    weighted_rel_spread_sum = 0.0
+    spread_weight_sum = 0.0
+    n_active = 0
 
-    n_total = len(chain)
-    n_active = len(active)
-    if n_total == 0 or n_active == 0:
+    for o in chain:
+        w = atm_weight(o["strike"], spot)
+        weighted_total += w
+
+        bid = o.get("bid")
+        ask = o.get("ask")
+        if bid is None or ask is None or bid <= 0 or ask <= bid:
+            continue
+
+        n_active += 1
+        weighted_active += w
+
+        mid = (ask + bid) / 2
+        if mid > 0 and w > 0:
+            weighted_rel_spread_sum += w * ((ask - bid) / mid)
+            spread_weight_sum += w
+
+        if o["type"] == "CALL":
+            weighted_calls += w
+        elif o["type"] == "PUT":
+            weighted_puts += w
+
+    if weighted_total <= 0:
+        logger.debug("OLSI %s weighted_total<=0 spot=%s", symbol or "N/A", spot)
         return 0.0
 
-    asr = n_active / n_total
-
-    rel_spreads = []
-    for o in active:
-        mid = (o["ask"] + o["bid"]) / 2
-        if mid > 0:
-            rel_spreads.append((o["ask"] - o["bid"]) / mid)
-
-    if not rel_spreads:
+    if n_active < MIN_ACTIVE_OPTIONS or weighted_active <= 0:
+        logger.debug(
+            "OLSI %s too few active: n_total=%d n_active=%d",
+            symbol or "N/A", len(chain), n_active
+        )
         return 0.0
 
-    avg_rel_spread = sum(rel_spreads) / len(rel_spreads)
+    if spread_weight_sum <= 0:
+        logger.debug("OLSI %s spread_weight_sum<=0", symbol or "N/A")
+        return 0.0
+
+    asr = weighted_active / weighted_total
+    avg_rel_spread = weighted_rel_spread_sum / spread_weight_sum
     nss = 1 / (1 + avg_rel_spread)
 
-    calls = sum(1 for o in active if o["type"] == "CALL")
-    puts = sum(1 for o in active if o["type"] == "PUT")
+    cp_sum = weighted_calls + weighted_puts
+    if cp_sum <= 0:
+        logger.debug("OLSI %s no call/put structure", symbol or "N/A")
+        return 0.0
 
-    if calls == 0 or puts == 0:
-        sb = 0.0
-    else:
-        sb = min(calls, puts) / max(calls, puts)
+    sb = min(weighted_calls, weighted_puts) / cp_sum
 
     return round(asr * nss * sb, 4)
 
+
 def get_okx_olsi(symbol, tickers=None):
     near_chain = get_okx_near_chain(symbol, tickers=tickers)
-    return okx_liquidity_structure_index(near_chain)
+    spot = get_okx_spot(symbol)
+    if spot is None:
+        logger.debug("OLSI %s spot unavailable", symbol)
+        return 0.0
+    return okx_liquidity_structure_index(near_chain, spot, symbol=symbol)
 
 # ---------- STATE ----------
 regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
@@ -429,6 +478,12 @@ def calc_okx_olsi_slope(symbol):
         return None
 
     return round((last - first) / first, 4)
+
+
+def norm_slope(x, cap=0.2):
+    if x is None:
+        return None
+    return max(-1.0, min(1.0, x / cap))
 
 def classify_market_liquidity(slope):
     if slope is None:
@@ -639,7 +694,7 @@ def main():
 
                     # ===== DIVERGENCE ENGINE (Slope-based) =====
                     if s in OKX_SYMBOLS and slope is not None and okx_olsi_slope is not None:
-                        divergence_diff = round(slope - okx_olsi_slope, 4)
+                        divergence_diff = round(norm_slope(slope) - norm_slope(okx_olsi_slope), 4)
 
                         if abs(divergence_diff) >= 1.0:
                             divergence = "EXTREME"
