@@ -321,10 +321,16 @@ def get_okx_spot(symbol):
     return _safe_float(data[0].get("idxPx"))
 
 
-def atm_weight(strike, spot):
+def atm_weight(strike, spot, symbol=None, k=2.5):
     if spot is None or spot <= 0:
         return 0.0
-    return math.exp(-abs(strike - spot) / spot)
+
+    if symbol == "BTC":
+        k = 2.0
+    elif symbol == "ETH":
+        k = 3.0
+
+    return math.exp(-k * abs(strike - spot) / spot)
 
 
 def okx_liquidity_structure_index(chain, spot, symbol=None):
@@ -341,7 +347,7 @@ def okx_liquidity_structure_index(chain, spot, symbol=None):
     n_active = 0
 
     for o in chain:
-        w = atm_weight(o["strike"], spot)
+        w = atm_weight(o["strike"], spot, symbol=symbol)
         weighted_total += w
 
         bid = o.get("bid")
@@ -377,7 +383,7 @@ def okx_liquidity_structure_index(chain, spot, symbol=None):
         logger.debug("OLSI %s spread_weight_sum<=0", symbol or "N/A")
         return 0.0
 
-    asr = weighted_active / weighted_total
+    asr = min(1.0, weighted_active / max(weighted_total, 1e-6))
     avg_rel_spread = weighted_rel_spread_sum / spread_weight_sum
     nss = 1 / (1 + avg_rel_spread)
 
@@ -450,21 +456,6 @@ def calc_market_olsi_slope():
         return None
 
     return round(sum(slopes) / len(slopes), 4)
-
-def classify_liquidity(slope):
-    if slope is None:
-        return None
-
-    if slope > 0.15:
-        return "LIQUIDITY_EXPANDING_STRONG"
-    if slope > 0.05:
-        return "LIQUIDITY_EXPANDING"
-    if slope < -0.15:
-        return "LIQUIDITY_CRUSH_STRONG"
-    if slope < -0.05:
-        return "LIQUIDITY_CRUSH"
-
-    return "LIQUIDITY_NEUTRAL"
 
 def calc_okx_olsi_slope(symbol):
     h = list(okx_olsi_hist[symbol])
@@ -827,3 +818,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
