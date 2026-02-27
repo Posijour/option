@@ -182,6 +182,9 @@ def main():
                 try:
                     divergence = None
                     divergence_diff = None
+                    divergence_strength = None
+                    divergence_strength_class = None
+                    mci_norm = None
 
                     bybit_r = interpret_bybit_market(s)
 
@@ -207,7 +210,7 @@ def main():
                     if s in OKX_SYMBOLS:
                         okx_olsi_avg = calc_okx_iv(okx_olsi_hist, s)
                         okx_olsi_slope = calc_okx_iv_slope(okx_olsi_hist, s)
-                        divergence, divergence_diff = classify_mci_olsi_divergence(mci, okx_olsi_avg)
+                        divergence, divergence_diff, divergence_strength, divergence_strength_class, mci_norm = classify_mci_olsi_divergence(mci, okx_olsi_avg)
 
                     if s in OKX_SYMBOLS and okx_olsi_avg is not None:
                         send_to_db("okx_olsi", {
@@ -218,6 +221,9 @@ def main():
                             "okx_olsi_slope": okx_olsi_slope,
                             "divergence": divergence,
                             "divergence_diff": divergence_diff,
+                            "divergence_strength": divergence_strength,
+                            "divergence_strength_class": divergence_strength_class,
+                            "mci_norm": mci_norm,
                         })
 
                     phase = mci_phase(mci, slope)
@@ -263,6 +269,9 @@ def main():
                         "okx_olsi_slope": okx_olsi_slope,
                         "divergence": divergence,
                         "divergence_diff": divergence_diff,
+                        "divergence_strength": divergence_strength,
+                        "divergence_strength_class": divergence_strength_class,
+                        "mci_norm": mci_norm
                         "liquidity_phase": liquidity_phase,
                         "phase_divergence": phase_divergence,
                         "market_calm_ratio": None,
