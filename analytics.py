@@ -235,7 +235,7 @@ def classify_divergence_strength(strength):
     return "STRONG"
     
     
-    def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
+def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
     if mci is None or okx_olsi_avg is None:
         return None, None, None, None, None
 
