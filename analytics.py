@@ -226,7 +226,7 @@ def classify_divergence_strength(strength):
     if strength < 0.10:
         return "NONE"
 
-    if strength <= 0.20:
+    if strength < 0.20:
         return "WEAK"
 
     if strength <= 0.35:
