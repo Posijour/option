@@ -219,6 +219,20 @@ def classify_miti(okx_iv_slope):
     return "LIQUIDITY_FLAT"
 
 
+def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.15):
+    if mci is None or okx_olsi_avg is None:
+        return None, None
+
+    mci_norm = (mci + 1) / 2
+    diff = round(mci_norm - okx_olsi_avg, 3)
+
+    if abs(diff) < threshold:
+        return "ALIGNED", diff
+    if diff > 0:
+        return "CALM_WITHOUT_LIQUIDITY", diff
+    return "LIQUIDITY_WITHOUT_CALM", diff
+
+
 def mean(values):
     values = [v for v in values if v is not None]
     if not values:
