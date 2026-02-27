@@ -15,6 +15,7 @@ from analytics import (
     calc_okx_iv,
     calc_okx_iv_slope,
     calc_slope,
+    classify_mci_olsi_divergence,
     classify_market_iv,
     classify_miti,
     mci_phase,
@@ -206,6 +207,7 @@ def main():
                     if s in OKX_SYMBOLS:
                         okx_olsi_avg = calc_okx_iv(okx_olsi_hist, s)
                         okx_olsi_slope = calc_okx_iv_slope(okx_olsi_hist, s)
+                        divergence, divergence_diff = classify_mci_olsi_divergence(mci, okx_olsi_avg)
 
                     if s in OKX_SYMBOLS and okx_olsi_avg is not None:
                         send_to_db("okx_olsi", {
