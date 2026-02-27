@@ -207,6 +207,21 @@ def main():
                     okx_olsi_avg = None
                     okx_olsi_slope = None
 
+                    phase = mci_phase(mci, slope)
+                    if phase:
+                        phase_hist[s].append(phase)
+
+                    liquidity_phase = classify_miti(okx_olsi_slope)
+
+                    phase_divergence = None
+                    if phase and liquidity_phase:
+                        if phase in ["OVERCOMPRESSED", "ACCUMULATING_CALM"] and liquidity_phase == "LIQUIDITY_EXPANDING":
+                            phase_divergence = "PRE_BREAK_TENSION"
+                        elif phase == "RELEASING" and liquidity_phase == "LIQUIDITY_CRUSH":
+                            phase_divergence = "POST_MOVE_DECAY"
+                        elif phase in ["OVERCOMPRESSED", "STABLE_CALM"] and liquidity_phase == "LIQUIDITY_CRUSH":
+                            phase_divergence = "FALSE_COMPRESSION"
+
                     if s in OKX_SYMBOLS:
                         okx_olsi_avg = calc_okx_iv(okx_olsi_hist, s)
                         okx_olsi_slope = calc_okx_iv_slope(okx_olsi_hist, s)
@@ -223,23 +238,10 @@ def main():
                             "divergence_diff": divergence_diff,
                             "divergence_strength": divergence_strength,
                             "divergence_strength_class": divergence_strength_class,
+                            "liquidity_phase": liquidity_phase,
+                            "phase_divergence": phase_divergence,
                             "mci_norm": mci_norm,
                         })
-
-                    phase = mci_phase(mci, slope)
-                    if phase:
-                        phase_hist[s].append(phase)
-
-                    liquidity_phase = classify_miti(okx_olsi_slope)
-
-                    phase_divergence = None
-                    if phase and liquidity_phase:
-                        if phase in ["OVERCOMPRESSED", "ACCUMULATING_CALM"] and liquidity_phase == "LIQUIDITY_EXPANDING":
-                            phase_divergence = "PRE_BREAK_TENSION"
-                        elif phase == "RELEASING" and liquidity_phase == "LIQUIDITY_CRUSH":
-                            phase_divergence = "POST_MOVE_DECAY"
-                        elif phase in ["OVERCOMPRESSED", "STABLE_CALM"] and liquidity_phase == "LIQUIDITY_CRUSH":
-                            phase_divergence = "FALSE_COMPRESSION"
 
                     confidence = phase_confidence(mci, slope, list(phase_hist[s]))
                     prob_top1, prob_top2 = top_phase_probabilities(mci, slope)
