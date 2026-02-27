@@ -271,7 +271,7 @@ def main():
                         "divergence_diff": divergence_diff,
                         "divergence_strength": divergence_strength,
                         "divergence_strength_class": divergence_strength_class,
-                        "mci_norm": mci_norm
+                        "mci_norm": mci_norm,
                         "liquidity_phase": liquidity_phase,
                         "phase_divergence": phase_divergence,
                         "market_calm_ratio": None,
