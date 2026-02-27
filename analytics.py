@@ -219,9 +219,25 @@ def classify_miti(okx_iv_slope):
     return "LIQUIDITY_FLAT"
 
 
-def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
+def classify_divergence_strength(strength):
+    if strength is None:
+        return None
+
+    if strength < 0.10:
+        return "NONE"
+
+    if strength <= 0.20:
+        return "WEAK"
+
+    if strength <= 0.35:
+        return "MODERATE"
+
+    return "STRONG"
+    
+    
+    def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
     if mci is None or okx_olsi_avg is None:
-        return None, None, None
+        return None, None, None, None, None
 
     mci_norm = round((mci + 1) / 2, 3)
     diff = round(mci_norm - okx_olsi_avg, 3)
@@ -234,7 +250,9 @@ def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
     else:
         div_type = "LIQUIDITY_WITHOUT_CALM"
 
-    return div_type, strength, mci_norm
+    strength_class = classify_divergence_strength(strength)
+
+    return div_type, diff, strength, strength_class, mci_norm
 
 
 def mean(values):
