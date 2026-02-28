@@ -186,7 +186,7 @@ def calc_market_olsi_slope(hist, symbols):
     slopes = []
 
     for s in symbols:
-        val = calc_okx_iv_slope(hist, s)
+        val = calc_okx_olsi_slope(hist, s)
         if val is not None:
             slopes.append(val)
 
