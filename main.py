@@ -187,9 +187,6 @@ def main():
 
                     bybit_r = interpret_bybit_market(s)
 
-                    okx_olsi = None
-                    if s in OKX_SYMBOLS:
-                        okx_olsi = get_okx_olsi(s, tickers=okx_tickers_cache)
 
                     if not bybit_r and okx_olsi is None:
                         continue
@@ -198,13 +195,9 @@ def main():
                         regime_hist[s].append(bybit_r)
                         mci_hist[s].append(mci_value(bybit_r))
 
-                    if s in OKX_SYMBOLS:
-                        okx_olsi_hist[s].append(okx_olsi)
 
                     mci = calc_mci(mci_hist, s)
                     slope = calc_slope(mci_hist, s)
-                    okx_olsi_avg = None
-                    okx_olsi_slope = None
 
                     phase = mci_phase(mci, slope)
                     if phase:
