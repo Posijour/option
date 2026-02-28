@@ -161,14 +161,14 @@ def calc_slope(hist, symbol):
     return round(sum(h[half:]) / half - sum(h[:half]) / half, 3)
 
 
-def calc_okx_iv(hist, symbol):
+def calc_okx_olsi_mean(hist, symbol):
     h = hist[symbol]
     if len(h) < MCI_WINDOW:
         return None
     return round(sum(h) / len(h), 4)
 
 
-def calc_okx_iv_slope(hist, symbol):
+def calc_okx_olsi_slope(hist, symbol):
     h = list(hist[symbol])
     if len(h) < MCI_WINDOW:
         return None
@@ -182,7 +182,7 @@ def calc_okx_iv_slope(hist, symbol):
     return round((last - first) / first, 4)
 
 
-def calc_market_iv_slope(hist, symbols):
+def calc_market_olsi_slope(hist, symbols):
     slopes = []
 
     for s in symbols:
@@ -195,26 +195,15 @@ def calc_market_iv_slope(hist, symbols):
 
     return round(sum(slopes) / len(slopes), 4)
 
-
-def classify_market_iv(slope):
+def classify_olsi_slope(
+    slope,
+    threshold=OLSI_THRESHOLD
+):
     if slope is None:
         return None
-
-    if slope > OLSI_THRESHOLD:
-        return "LIQUIDITY_EXPANSION"
-
-    if slope < -0.01:
-        return "LIQUIDITY_CRUSH"
-
-    return "LIQUIDITY_STABLE"
-
-
-def classify_miti(okx_iv_slope):
-    if okx_iv_slope is None:
-        return None
-    if okx_iv_slope > OLSI_THRESHOLD:
+    if slope > threshold:
         return "LIQUIDITY_EXPANDING"
-    if okx_iv_slope < -OLSI_THRESHOLD:
+    if slope < -threshold:
         return "LIQUIDITY_CRUSH"
     return "LIQUIDITY_FLAT"
 
