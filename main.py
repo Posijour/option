@@ -215,7 +215,7 @@ def maybe_log_bybit_market_state():
     send_to_db("bybit_market_state", row)
 
     logger.info(
-        "BYBIT MARKET STATE | mci=%s slope=%s phase=%s confidence=%s",
+        "BYBIT MARKET STATE | regime=%s mci=%s slope=%s phase=%s confidence=%s",
         bybit_regime,
         bybit_mci,
         bybit_slope,
