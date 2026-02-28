@@ -16,7 +16,7 @@ from analytics import (
     calc_market_olsi_slope,
     classify_olsi_slope,
     phase_confidence,
-    okx_liquidity_structure_index
+    okx_liquidity_structure_index,
     top_phase_probabilities,
     classify_mci_olsi_divergence
 )
@@ -259,6 +259,14 @@ def main():
             else:
                 market_mci = market_slope = market_phase = None
 
+            market_olsi_vals = []
+                for s in OKX_SYMBOLS:
+                    h = okx_olsi_hist.get(s)
+                    if h and len(h) >= MCI_WINDOW:
+                        market_olsi_vals.append(sum(h) / len(h))
+                
+            market_olsi_avg = round(sum(market_olsi_vals) / len(market_olsi_vals), 4) if market_olsi_vals else None
+
             market_divergence = None
             market_divergence_diff = None
             market_divergence_strength = None
@@ -276,14 +284,6 @@ def main():
 
             calm_count = sum(1 for v in last_state.values() if v["regime"] == "CALM")
             market_calm_ratio = round(calm_count / len(last_state), 2) if last_state else None
-
-            market_olsi_vals = []
-                for s in OKX_SYMBOLS:
-                    h = okx_olsi_hist.get(s)
-                    if h and len(h) >= MCI_WINDOW:
-                        market_olsi_vals.append(sum(h) / len(h))
-                
-                market_olsi_avg = round(sum(market_olsi_vals) / len(market_olsi_vals), 4) if market_olsi_vals else None
 
             market_olsi_slope = calc_market_olsi_slope(okx_olsi_hist, OKX_SYMBOLS)
             market_olsi_regime = classify_olsi_slope(market_olsi_slope)
