@@ -17,7 +17,6 @@ from analytics import (
     classify_olsi_slope,
     phase_confidence,
     okx_liquidity_structure_index,
-    top_phase_probabilities,
     classify_mci_olsi_divergence
 )
 from data_bybit import interpret_bybit_market
@@ -243,7 +242,6 @@ def main():
 
 
                     confidence = phase_confidence(mci, slope, list(phase_hist[s]))
-                    prob_top1, prob_top2 = top_phase_probabilities(mci, slope)
 
                     last_state[s] = {
                         "regime": bybit_r,
@@ -251,8 +249,6 @@ def main():
                         "slope": slope,
                         "phase": phase,
                         "confidence": confidence,
-                        "prob_top1": prob_top1,
-                        "prob_top2": prob_top2,
                     }
 
 
