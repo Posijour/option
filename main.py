@@ -140,28 +140,6 @@ def maybe_log_market_state():
     }
     send_to_db("options_market_state", row)
 
-    for symbol in SYMBOLS:
-        state = last_state.get(symbol)
-        if not state:
-            continue
-
-        row = {
-            "ts_unix_ms": now_ms,
-            "symbol": symbol,
-            "regime": state.get("regime"),
-            "mci": state.get("mci"),
-            "mci_slope": state.get("slope"),
-            "mci_phase": state.get("phase"),
-            "market_calm_ratio": market_state["calm_ratio"],
-            "olsi_avg": market_state.get("olsi_avg"),
-            "olsi_slope": market_state.get("olsi_slope"),
-            "divergence": market_state.get("divergence"),
-            "divergence_diff": market_state.get("divergence_diff"),
-            "divergence_strength": market_state.get("divergence_strength"),
-            "divergence_class": market_state.get("divergence_class"),
-        }
-        send_to_db("options_ticker_state", row)
-
     while next_market_log_ts <= now_ms:
         next_market_log_ts += MARKET_LOG_INTERVAL * 1000
 
