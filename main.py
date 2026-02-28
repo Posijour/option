@@ -9,17 +9,12 @@ from threading import Event
 import requests
 
 from analytics import (
-    OLSI_THRESHOLD,
     calc_mci,
     calc_slope,
-    classify_mci_olsi_divergence,
     mci_phase,
     mci_value,
-    calc_okx_olsi_mean,
-    calc_okx_olsi_slope,
     calc_market_olsi_slope,
     classify_olsi_slope,
-    okx_liquidity_structure_index,
     phase_confidence,
     top_phase_probabilities,
 )
@@ -203,37 +198,6 @@ def main():
                     if phase:
                         phase_hist[s].append(phase)
 
-                    liquidity_phase = classify_olsi_slope(okx_olsi_slope)
-
-                    phase_divergence = None
-                    if phase and liquidity_phase:
-                        if phase in ["OVERCOMPRESSED", "ACCUMULATING_CALM"] and liquidity_phase == "LIQUIDITY_EXPANDING":
-                            phase_divergence = "PRE_BREAK_TENSION"
-                        elif phase == "RELEASING" and liquidity_phase == "LIQUIDITY_CRUSH":
-                            phase_divergence = "POST_MOVE_DECAY"
-                        elif phase in ["OVERCOMPRESSED", "STABLE_CALM"] and liquidity_phase == "LIQUIDITY_CRUSH":
-                            phase_divergence = "FALSE_COMPRESSION"
-
-                    if s in OKX_SYMBOLS:
-                        okx_olsi_avg = calc_okx_olsi_mean(okx_olsi_hist, s)
-                        okx_olsi_slope = calc_okx_olsi_slope(okx_olsi_hist, s)
-                        divergence, divergence_diff, divergence_strength, divergence_strength_class, mci_norm = classify_mci_olsi_divergence(mci, okx_olsi_avg)
-
-                    if s in OKX_SYMBOLS and okx_olsi_avg is not None:
-                        send_to_db("okx_olsi", {
-                            "ts_unix_ms": now_ts_ms(),
-                            "symbol": s,
-                            "okx_olsi": okx_olsi,
-                            "okx_olsi_avg": okx_olsi_avg,
-                            "okx_olsi_slope": okx_olsi_slope,
-                            "divergence": divergence,
-                            "divergence_diff": divergence_diff,
-                            "divergence_strength": divergence_strength,
-                            "divergence_strength_class": divergence_strength_class,
-                            "liquidity_phase": liquidity_phase,
-                            "phase_divergence": phase_divergence,
-                            "mci_norm": mci_norm,
-                        })
 
                     confidence = phase_confidence(mci, slope, list(phase_hist[s]))
                     prob_top1, prob_top2 = top_phase_probabilities(mci, slope)
@@ -265,13 +229,17 @@ def main():
 
                     send_to_db("options_ticker_cycle", ticker_payload)
                     logger.info(
-                        "ticker processed: symbol=%s bybit=%s okx_olsi=%s mci=%s slope=%s phase=%s",
-                        s, bybit_r, okx_olsi, mci, slope, phase
+                        "ticker processed: symbol=%s bybit=%s mci=%s slope=%s phase=%s",
+                        s, bybit_r, mci, slope, phase
                     )
 
                 except Exception as e:
                     logger.exception("cycle error for %s: %s", s, e)
                     continue
+
+            for s in OKX_SYMBOLS:
+                olsi = get_okx_olsi(s, tickers=okx_tickers_cache)
+                okx_olsi_hist[s].append(olsi)
 
             mci_vals = [v["mci"] for v in last_state.values() if v["mci"] is not None]
             slope_vals = [v["slope"] for v in last_state.values() if v["slope"] is not None]
