@@ -193,9 +193,19 @@ def maybe_log_bybit_market_state():
     bybit_slope = round(sum(slope_vals) / len(slope_vals), 3)
     bybit_phase = mci_phase(bybit_mci, bybit_slope)
 
+    regimes = [
+        v["regime"] for v in last_state.values()
+        if v.get("regime") is not None
+    ]
+    
+    bybit_regime = None
+    if regimes:
+        bybit_regime = max(set(regimes), key=regimes.count)
+
     row = {
         "ts_unix_ms": now_ms,
         "symbol": "BYBIT",
+        "regime": bybit_regime,
         "mci": bybit_mci,
         "mci_slope": bybit_slope,
         "mci_phase": bybit_phase,
@@ -205,11 +215,12 @@ def maybe_log_bybit_market_state():
     send_to_db("bybit_market_state", row)
 
     logger.info(
-        "BYBIT MARKET STATE | mci=%s slope=%s phase=%s",
+        "BYBIT MARKET STATE | mci=%s slope=%s phase=%s confidence=%s",
+        bybit_regime,
         bybit_mci,
         bybit_slope,
         bybit_phase,
-        "confidence": bybit_confidence,
+        bybit_confidence,
     )
 
     while next_bybit_market_log_ts <= now_ms:
