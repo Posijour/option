@@ -160,14 +160,8 @@ def main():
 
             for s in SYMBOLS:
                 try:
-                    divergence = None
-                    divergence_diff = None
-                    divergence_strength = None
-                    divergence_strength_class = None
-                    mci_norm = None
 
                     bybit_r = interpret_bybit_market(s)
-
 
                     if not bybit_r:
                         continue
