@@ -179,6 +179,16 @@ def maybe_log_bybit_market_state():
     if not mci_vals or not slope_vals:
         return
 
+    confidence_vals = [
+        v["confidence"] for v in last_state.values()
+        if v.get("confidence") is not None
+    ]
+    
+    bybit_confidence = (
+        round(sum(confidence_vals) / len(confidence_vals), 2)
+        if confidence_vals else None
+    )
+
     bybit_mci = round(sum(mci_vals) / len(mci_vals), 2)
     bybit_slope = round(sum(slope_vals) / len(slope_vals), 3)
     bybit_phase = mci_phase(bybit_mci, bybit_slope)
@@ -189,6 +199,7 @@ def maybe_log_bybit_market_state():
         "mci": bybit_mci,
         "mci_slope": bybit_slope,
         "mci_phase": bybit_phase,
+        "confidence": bybit_confidence,
     }
 
     send_to_db("bybit_market_state", row)
@@ -198,6 +209,7 @@ def maybe_log_bybit_market_state():
         bybit_mci,
         bybit_slope,
         bybit_phase,
+        "confidence": bybit_confidence,
     )
 
     while next_bybit_market_log_ts <= now_ms:
