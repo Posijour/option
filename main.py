@@ -127,18 +127,17 @@ def maybe_log_market_state():
 
     row = {
         "ts_unix_ms": now_ms,
-        "symbol": "OKX",
+        "symbol": "MARKET",
     
         # OKX liquidity
         "okx_olsi_avg": market_state.get("olsi_avg"),
         "okx_olsi_slope": market_state.get("olsi_slope"),
         "okx_liquidity_regime": market_state.get("liquidity_regime"),
     
-        # divergence (ОСТАВЛЯЕМ)
-        "divergence": market_state.get("divergence"),
+        # divergence (КЛЮЧЕВО)
+        "divergence_type": market_state.get("divergence"),
         "divergence_diff": market_state.get("divergence_diff"),
         "divergence_strength": market_state.get("divergence_strength"),
-        "divergence_class": market_state.get("divergence_class"),
     }
 
     send_to_db("okx_market_state", row)
