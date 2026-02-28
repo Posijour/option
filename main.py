@@ -144,12 +144,10 @@ def maybe_log_market_state():
     send_to_db("okx_market_state", row)
 
     logger.info(
-        "OKX MARKET STATE | mci=%s slope=%s phase=%s olsi_avg=%s olsi_slope=%s div=%s(%s)",
-        market_mci,
-        market_slope,
-        market_phase,
+        "OKX MARKET STATE | olsi_avg=%s olsi_slope=%s liquidity=%s div=%s(%s)",
         market_state.get("olsi_avg"),
         market_state.get("olsi_slope"),
+        market_state.get("liquidity_regime"),
         market_state.get("divergence"),
         market_state.get("divergence_strength"),
     )
