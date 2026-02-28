@@ -126,18 +126,9 @@ def maybe_log_market_state():
     if now_ms < next_market_log_ts:
         return
 
-    market_mci = market_state["mci"]
-    market_slope = market_state["slope"]
-    market_phase = market_state["phase"]
-
     row = {
         "ts_unix_ms": now_ms,
         "symbol": "OKX",
-    
-        # MCI (агрегированный)
-        "mci": market_mci,
-        "mci_slope": market_slope,
-        "mci_phase": market_phase,
     
         # OKX liquidity
         "okx_olsi_avg": market_state.get("olsi_avg"),
@@ -169,7 +160,8 @@ def maybe_log_market_state():
 
 def maybe_log_bybit_market_state():
     global next_bybit_market_log_ts
-
+    if not last_state:
+        return
     now_ms = now_ts_ms()
     if next_bybit_market_log_ts is None:
         next_bybit_market_log_ts = now_ms + MARKET_LOG_INTERVAL * 1000
