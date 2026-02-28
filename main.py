@@ -101,8 +101,8 @@ regime_hist = {s: deque(maxlen=STABILITY_WINDOW) for s in SYMBOLS}
 mci_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
 okx_olsi_hist = {s: deque(maxlen=MCI_WINDOW) for s in OKX_SYMBOLS}
 
-phase_hist = {s: deque(maxlen=6) for s in SYMBOLS}
-market_phase_hist = deque(maxlen=6)
+phase_hist = {s: deque(maxlen=MCI_WINDOW) for s in SYMBOLS}
+market_phase_hist = deque(maxlen=MCI_WINDOW)
 next_market_log_ts = None
 
 last_state = {}
@@ -315,7 +315,7 @@ def main():
                 ) = classify_mci_olsi_divergence(market_mci, market_olsi_avg)
 
             calm_count = sum(1 for v in last_state.values() if v["regime"] == "CALM")
-            market_calm_ratio = round(calm_count / len(last_state), 2) if last_state else None
+            market_calm_ratio = round(calm_count / len(SYMBOLS), 2)
 
             market_olsi_slope = calc_market_olsi_slope(okx_olsi_hist, OKX_SYMBOLS)
             market_olsi_regime = classify_olsi_slope(market_olsi_slope)
