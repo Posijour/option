@@ -240,9 +240,9 @@ def classify_mci_olsi_divergence(mci, okx_olsi_avg, threshold=0.10):
     if abs(diff) < threshold:
         div_type = "ALIGNED"
     elif diff >= threshold:
-        div_type = "CALM_WITHOUT_LIQUIDITY"
+        div_type = "CALM_DOMINANT"
     else:
-        div_type = "LIQUIDITY_WITHOUT_CALM"
+        div_type = "LIQUIDITY_DOMINANT"
 
     strength_class = classify_divergence_strength(strength)
 
