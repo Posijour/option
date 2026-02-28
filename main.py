@@ -260,10 +260,10 @@ def main():
                 market_mci = market_slope = market_phase = None
 
             market_olsi_vals = []
-                for s in OKX_SYMBOLS:
-                    h = okx_olsi_hist.get(s)
-                    if h and len(h) >= MCI_WINDOW:
-                        market_olsi_vals.append(sum(h) / len(h))
+            for s in OKX_SYMBOLS:
+                h = okx_olsi_hist.get(s)
+                if h and len(h) >= MCI_WINDOW:
+                    market_olsi_vals.append(sum(h) / len(h))
                 
             market_olsi_avg = round(sum(market_olsi_vals) / len(market_olsi_vals), 4) if market_olsi_vals else None
 
