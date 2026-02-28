@@ -233,12 +233,12 @@ def maybe_log_bybit_market_state():
 
 def main():
     threading.Thread(target=run_http_server, args=(stop_event,), daemon=True).start()
-    logger.info("service started: symbols=%s interval=%ss", ",".join(SYMBOLS), CHECK_INTERVAL)
+    logger.debug("service started: symbols=%s interval=%ss", ",".join(SYMBOLS), CHECK_INTERVAL)
     try:
         while not stop_event.is_set():
             cycle_start = time.time()
             okx_tickers_cache = None
-            logger.info("cycle started")
+            logger.debug("cycle started")
 
             try:
                 okx_tickers_cache = get_okx_tickers()
@@ -343,7 +343,7 @@ def main():
 
             maybe_log_market_state()
             maybe_log_bybit_market_state()
-            logger.info(
+            logger.debug(
                 "cycle finished: market_mci=%s market_slope=%s market_phase=%s calm_ratio=%s liquidity=%s",
                 market_mci, market_slope, market_phase, market_calm_ratio, market_olsi_regime
             )
@@ -354,7 +354,7 @@ def main():
 
     except KeyboardInterrupt:
         stop_event.set()
-        logger.info("shutdown requested")
+        logger.debug("shutdown requested")
 
 
 if __name__ == "__main__":
