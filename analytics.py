@@ -53,7 +53,11 @@ def regime_for_expiry(opts):
     downside = cls(ps)
     upside = cls(cs)
 
-    short_vol = ps and cs and ps["ratio"] >= 0.20 and cs["ratio"] >= 0.20
+    short_vol = (
+        ps and cs and
+        ps["ratio"] >= CREDIT_CHEAP and
+        cs["ratio"] >= CREDIT_CHEAP
+    )
 
     piv = [p["iv"] for p in puts if p["iv"] > 0]
     civ = [c["iv"] for c in calls if c["iv"] > 0]
