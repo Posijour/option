@@ -27,7 +27,7 @@ from http_server import run_http_server
 SUPABASE_URL = "https://qcusrlmueapuqbjwuwvh.supabase.co"
 SUPABASE_KEY = "sb_publishable_VsMaZGz98nm5lSQZJ-g-kQ_bUOfSO_r"
 
-SYMBOLS = ["BTC", "ETH", "SOL", "MNT", "XRP", "DOGE"]
+SYMBOLS = ["BTC", "ETH"]
 OKX_SYMBOLS = ["BTC", "ETH"]
 
 CHECK_INTERVAL = 300
@@ -35,6 +35,7 @@ MARKET_LOG_INTERVAL = 30 * 60
 STABILITY_WINDOW = 3
 MCI_WINDOW = 12
 MIN_ACTIVE_OPTIONS = 10
+next_bybit_market_log_ts = None
 
 stop_event = Event()
 
@@ -131,17 +132,87 @@ def maybe_log_market_state():
 
     row = {
         "ts_unix_ms": now_ms,
-        "symbol": "MARKET",
+        "symbol": "OKX",
+    
+        # MCI (агрегированный)
         "mci": market_mci,
         "mci_slope": market_slope,
         "mci_phase": market_phase,
-        "liquidity_regime": market_state.get("liquidity_regime"),
-        "market_calm_ratio": market_state["calm_ratio"],
+    
+        # OKX liquidity
+        "okx_olsi_avg": market_state.get("olsi_avg"),
+        "okx_olsi_slope": market_state.get("olsi_slope"),
+        "okx_liquidity_regime": market_state.get("liquidity_regime"),
+    
+        # divergence (ОСТАВЛЯЕМ)
+        "divergence": market_state.get("divergence"),
+        "divergence_diff": market_state.get("divergence_diff"),
+        "divergence_strength": market_state.get("divergence_strength"),
+        "divergence_class": market_state.get("divergence_class"),
     }
-    send_to_db("options_market_state", row)
+
+    send_to_db("okx_market_state", row)
+
+    logger.info(
+        "OKX MARKET STATE | mci=%s slope=%s phase=%s olsi_avg=%s olsi_slope=%s div=%s(%s)",
+        market_mci,
+        market_slope,
+        market_phase,
+        market_state.get("olsi_avg"),
+        market_state.get("olsi_slope"),
+        market_state.get("divergence"),
+        market_state.get("divergence_strength"),
+    )
 
     while next_market_log_ts <= now_ms:
         next_market_log_ts += MARKET_LOG_INTERVAL * 1000
+
+def maybe_log_bybit_market_state():
+    global next_bybit_market_log_ts
+
+    now_ms = now_ts_ms()
+    if next_bybit_market_log_ts is None:
+        next_bybit_market_log_ts = now_ms + MARKET_LOG_INTERVAL * 1000
+        return
+
+    if now_ms < next_bybit_market_log_ts:
+        return
+
+    mci_vals = [
+        v["mci"] for v in last_state.values()
+        if v.get("mci") is not None
+    ]
+    slope_vals = [
+        v["slope"] for v in last_state.values()
+        if v.get("slope") is not None
+    ]
+
+    if not mci_vals or not slope_vals:
+        return
+
+    bybit_mci = round(sum(mci_vals) / len(mci_vals), 2)
+    bybit_slope = round(sum(slope_vals) / len(slope_vals), 3)
+    bybit_phase = mci_phase(bybit_mci, bybit_slope)
+
+    row = {
+        "ts_unix_ms": now_ms,
+        "symbol": "BYBIT",
+        "mci": bybit_mci,
+        "mci_slope": bybit_slope,
+        "mci_phase": bybit_phase,
+    }
+
+    send_to_db("bybit_market_state", row)
+
+    logger.info(
+        "BYBIT MARKET STATE | mci=%s slope=%s phase=%s",
+        bybit_mci,
+        bybit_slope,
+        bybit_phase,
+    )
+
+    while next_bybit_market_log_ts <= now_ms:
+        next_bybit_market_log_ts += MARKET_LOG_INTERVAL * 1000
 
 
 def main():
@@ -192,26 +263,6 @@ def main():
                         "prob_top2": prob_top2,
                     }
 
-                    ticker_payload = {
-                        "ts_unix_ms": now_ts_ms(),
-                        "symbol": s,
-                        "regime": bybit_r,
-                        "mci": mci,
-                        "mci_slope": slope,
-                        "mci_phase": phase,
-                        "mci_phase_confidence": confidence,
-                        "mci_phase_prob_top1": prob_top1,
-                        "mci_phase_prob_top2": prob_top2,
-                        "market_calm_ratio": None,
-                        "liquidity_regime": market_state.get("liquidity_regime"),
-                        "alert": None,
-                    }
-
-                    send_to_db("options_ticker_cycle", ticker_payload)
-                    logger.info(
-                        "ticker processed: symbol=%s bybit=%s mci=%s slope=%s phase=%s",
-                        s, bybit_r, mci, slope, phase
-                    )
 
                 except Exception as e:
                     logger.exception("cycle error for %s: %s", s, e)
@@ -278,6 +329,7 @@ def main():
                 market_phase_hist.append(market_phase)
 
             maybe_log_market_state()
+            maybe_log_bybit_market_state()
             logger.info(
                 "cycle finished: market_mci=%s market_slope=%s market_phase=%s calm_ratio=%s liquidity=%s",
                 market_mci, market_slope, market_phase, market_calm_ratio, market_olsi_regime
