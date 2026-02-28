@@ -74,8 +74,13 @@ def send_to_db(event, payload):
             },
             timeout=5
         )
-    except Exception:
-        return
+    except Exception as e:
+        logger.error(
+            "SUPABASE WRITE FAILED | event=%s | payload=%s | error=%s",
+            event,
+            payload,
+            e
+        )
 
 
 def now_ts_ms():
