@@ -210,7 +210,7 @@ def main():
                     if phase:
                         phase_hist[s].append(phase)
 
-                    liquidity_phase = classify_miti(okx_olsi_slope)
+                    liquidity_phase = classify_olsi_slope(okx_olsi_slope)
 
                     phase_divergence = None
                     if phase and liquidity_phase:
@@ -222,8 +222,8 @@ def main():
                             phase_divergence = "FALSE_COMPRESSION"
 
                     if s in OKX_SYMBOLS:
-                        okx_olsi_avg = calc_okx_iv(okx_olsi_hist, s)
-                        okx_olsi_slope = calc_okx_iv_slope(okx_olsi_hist, s)
+                        okx_olsi_avg = calc_okx_olsi_mean(okx_olsi_hist, s)
+                        okx_olsi_slope = calc_okx_olsi_slope(okx_olsi_hist, s)
                         divergence, divergence_diff, divergence_strength, divergence_strength_class, mci_norm = classify_mci_olsi_divergence(mci, okx_olsi_avg)
 
                     if s in OKX_SYMBOLS and okx_olsi_avg is not None:
@@ -293,8 +293,8 @@ def main():
             calm_count = sum(1 for v in last_state.values() if v["regime"] == "CALM")
             market_calm_ratio = round(calm_count / len(last_state), 2) if last_state else None
 
-            market_olsi_slope = calc_market_iv_slope(okx_olsi_hist, OKX_SYMBOLS)
-            market_olsi_regime = classify_market_iv(market_olsi_slope)
+            market_olsi_slope = calc_market_olsi_slope(okx_olsi_hist, OKX_SYMBOLS)
+            market_olsi_regime = classify_olsi_slope(market_olsi_slope)
 
             market_state.update({
                 "mci": market_mci,
