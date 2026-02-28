@@ -169,9 +169,10 @@ def calc_okx_olsi_mean(hist, symbol):
 
 
 def calc_okx_olsi_slope(hist, symbol):
-    h = list(hist[symbol])
+    h = [v for v in hist[symbol] if v > 0]
     if len(h) < MCI_WINDOW:
         return None
+    return round((h[-1] - h[0]) / h[0], 4)
 
     first = h[0]
     last = h[-1]
