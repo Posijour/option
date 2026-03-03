@@ -46,11 +46,11 @@ class BotRuntime:
         self.metrics = RuntimeMetrics(
             health={"bybit": FeedHealth(), "okx": FeedHealth()}
         )
-    self.telemetry = TelemetryBuffer(
+        self.telemetry = TelemetryBuffer(
             cfg.supabase_url, cfg.supabase_key, cfg.db_batch_size, self.metrics, logger
         )
 
-def get_okx_olsi(self, symbol, tickers=None):
+    def get_okx_olsi(self, symbol, tickers=None):
         near_chain = get_okx_near_chain(symbol, tickers=tickers)
         spot = get_okx_spot(symbol)
         if spot is None:
@@ -64,7 +64,7 @@ def get_okx_olsi(self, symbol, tickers=None):
             symbol=symbol,
         )
 
-def update_feed_health(self, feed_name, has_data):
+    def update_feed_health(self, feed_name, has_data):
         state = self.metrics.health[feed_name]
         if has_data:
             state.bad_windows = 0
@@ -156,7 +156,7 @@ def update_feed_health(self, feed_name, has_data):
             round(sum(market_olsi_vals) / len(market_olsi_vals), 4) if market_olsi_vals else None
         )
 
-            div, div_diff, div_strength, div_class, _ = classify_mci_olsi_divergence(
+        div, div_diff, div_strength, div_class, _ = classify_mci_olsi_divergence(
             market_mci, market_olsi_avg
         )
 
